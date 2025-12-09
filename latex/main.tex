@@ -1,0 +1,87 @@
+\documentclass[12pt, a4paper]{article}
+
+% Pakiety kodowania i językowe
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[polish]{babel}
+
+% Pakiety do geometrii i 
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+% Konfiguracja geometrii strony
+\geometry{
+    a4paper,
+    total={170mm,257mm},
+    left=25mm,
+    top=25mm,
+    bottom=25mm,
+    right=25mm
+}
+
+% Konfiguracja linków
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    filecolor=magenta,      
+    urlcolor=blue,
+}
+
+% Konfiguracja wyświetlania kodu
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    captionpos=b,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{purple}
+}
+
+% Dane dokumentu
+\title{Układ sterowania położeniem piłki pingpongowej na belce}
+\author{Piotr Bednarek \\ Jan Andrzejewski \\ Mateusz Banaszak}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Wstęp}
+Przedmiotem projektu jest układ automatycznej regulacji pozycji piłki pingpongowej na
+pochylonej belce. System wykorzystuje serwo TowerPro MG946R do sterowania kątem nachylenia belki
+oraz laserowy czujnik odległości Time-of-Flight VL53L0X do pomiaru aktualnego położenia
+piłki. Mikrokontroler STM32F767ZI analizuje dane z czujnika i w czasie rzeczywistym
+koryguje nachylenie belki, aby utrzymać piłkę w zadanej pozycji lub śledzić określoną
+trajektorię. Układ stanowi klasyczny przykład zastosowania regulacji PID w systemie
+niestabilnym, gdzie niewielkie zakłócenia mogą prowadzić do utraty kontroli nad obiektem.
+
+\section{Opis sprzętu}
+Opis wykorzystanego mikrokontrolera (STM32) oraz peryferiów (czujniki, moduły).
+
+\begin{itemize}
+    \item STM Nucleo F767ZI
+    \item Servo TowerProMG90s
+    \item Grove - VL53LOX Timeof Flight I2C
+\end{itemize}
+
+\section{Opis oprogramowania}
+\subsection{Struktura projektu}
+Opis struktury plików i katalogów.
+
+\subsection{Kluczowe algorytmy}
+Opis najważniejszych fragmentów kodu.
+
+\section{Testy i wyniki}
+Opis przeprowadzonych testów i otrzymanych wyników.
+
+\section{Podsumowanie}
+Wnioski końcowe i możliwości rozwoju projektu.
+
+\end{document}
