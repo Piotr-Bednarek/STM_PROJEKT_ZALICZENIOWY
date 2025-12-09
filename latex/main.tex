@@ -16,7 +16,6 @@
 % Konfiguracja geometrii strony
 \geometry{
     a4paper,
-    total={170mm,257mm},
     left=25mm,
     top=25mm,
     bottom=25mm,
@@ -67,21 +66,54 @@ Opis wykorzystanego mikrokontrolera (STM32) oraz peryferiów (czujniki, moduły)
 
 \begin{itemize}
     \item STM Nucleo F767ZI
-    \item Servo TowerProMG90s
+    \item Servo TowerPro MG946R
     \item Grove - VL53LOX Timeof Flight I2C
 \end{itemize}
 
-\section{Opis oprogramowania}
-\subsection{Struktura projektu}
-Opis struktury plików i katalogów.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.5\linewidth]{img/plytka.png}
+\end{figure}
 
-\subsection{Kluczowe algorytmy}
-Opis najważniejszych fragmentów kodu.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.5\linewidth]{img/sensor.png}
+\end{figure}
 
-\section{Testy i wyniki}
-Opis przeprowadzonych testów i otrzymanych wyników.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.5\linewidth]{img/servo.png}
+\end{figure}
 
-\section{Podsumowanie}
-Wnioski końcowe i możliwości rozwoju projektu.
+\section{Wymagania dodatkowe}
+\begin{enumerate}
+    \item Podział kodu źródłowego na moduły i dokumentacja kodu zgodna ze standardem dokumentacji.
+    \item Wykorzystanie systemu kontroli wersji (Git) z publicznym repozytorium (GitHub).
+    \item Dedykowana aplikacja desktopowa jako graficzny interfejs użytkownika
+          zaprogramowana w Pythonie za pomocą nowoczesnych bibliotek.
+          % \item Zapewnienie uchybu ustalonego na poziomie 1\% zakresu regulacji w stanie ustalonym za pomocą
+          %   odpowiednio dostrojonego regulatora PID.
+    \item Implementacja śledzenia sygnałów sterujących i pomiarowych za pomocą wykresów w aplikacji desktopowej (UI).
+    \item Dodatkowe urządzenie wyjścia użytkownika za pomocą rzędu diod LED RGB do
+          wizualizacji uchybu układu.
+    \item Dodatkowe przyciski do manualnej zmiany kątu nachylenia belki lub wentylator wprowadzający
+          zakłócenia do układu.
+    \item Zapewnienie logow z procesu stabilizacji do odtworzenia przebiegow uchyby i wyjscia po przeprowadzeniu eksperymentu (CSV/TXT)
+    \item Dodatkowe urządzenie wejścia użytkownika w postaci potencjometru do zmiany zadanej pozycji piłki na belce.
+    \item Wykorzystanie sumy kontrolnej do wykrywania błędów transmisji w komunikacji szeregowej.
+    \item Wykorzystanie systemu czasu rzeczywistego FreeRTOS.
+\end{enumerate}
+
+\section{Model/druk 3D}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.65\linewidth]{img/rampa1.png}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.65\linewidth]{img/rampa2.png}
+\end{figure}
 
 \end{document}
