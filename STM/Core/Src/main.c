@@ -244,8 +244,8 @@ int main(void)
 	// Init VL53L0X
 	if (VL53L0X_Init(&tof, &hi2c1)) {
 		HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init OK\r\n", 17, 100);
-		// Correcting for +40mm constant offset
-		VL53L0X_SetOffset(&tof, -40);
+		// USUWAMY STARY OFFSET (-40)
+		// VL53L0X_SetOffset(&tof, -40);
 	} else {
 		HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init FAILED\r\n", 21, 100);
 	}
@@ -358,6 +358,10 @@ int main(void)
 		distance = VL53L0X_ReadDistance(&tof);
 
 		if (distance != 0xFFFF && distance < 8190) {
+			// Korekta na promień kulki (średnica 40mm -> promień 20mm)
+			// Czujnik widzi powierzchnię, my chcemy środek.
+			distance += 20;
+
 			// Średnia krocząca
 			dist_history[dist_idx] = (float) distance;
 			dist_idx = (dist_idx + 1) % MOVING_AVG_SIZE;

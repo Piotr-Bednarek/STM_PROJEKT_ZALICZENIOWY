@@ -11,6 +11,11 @@ DEFAULT_KP = -0.11
 DEFAULT_KI = -0.004
 DEFAULT_KD = -2.0
 
+# FAJNE WARTOSCI PID:
+# DEFAULT_KP = -0.04
+# DEFAULT_KI = -0.0027
+# DEFAULT_KD = -3.0
+
 
 class UARTApp:
     def __init__(self, root):
