@@ -6,51 +6,11 @@ import threading
 import time
 import math
 
-class OneEuroFilter:
-    def __init__(self, min_cutoff=1.0, beta=0.007, d_cutoff=1.0):
-        """
-        min_cutoff: Minimalna częstotliwość odcięcia (dla wolnych ruchów) - im mniej, tym większe wygładzanie
-        beta:  Współczynnik szybkości reakcji (dla szybkich ruchów) - im więcej, tym mniejsze opóźnienie
-        d_cutoff: Częstotliwość odcięcia dla pochodnej (szumu szybkości)
-        """
-        self.min_cutoff = min_cutoff
-        self.beta = beta
-        self.d_cutoff = d_cutoff
-        self.x_prev = None
-        self.dx_prev = None
-        self.t_prev = None
 
-    def smoothing_factor(self, t_e, cutoff):
-        r = 2 * math.pi * cutoff * t_e
-        return r / (r + 1)
+DEFAULT_KP = -0.11
+DEFAULT_KI = -0.004
+DEFAULT_KD = -2.0
 
-    def exponential_smoothing(self, a, x, x_prev):
-        return a * x + (1 - a) * x_prev
-
-    def filter(self, t, x):
-        if self.x_prev is None:
-            self.x_prev = x
-            self.dx_prev = 0.0
-            self.t_prev = t
-            return x
-
-        t_e = t - self.t_prev
-        
-        # Filtruj pochodną (szybkość zmiany)
-        a_d = self.smoothing_factor(t_e, self.d_cutoff)
-        dx = (x - self.x_prev) / t_e if t_e > 0 else 0
-        dx_hat = self.exponential_smoothing(a_d, dx, self.dx_prev)
-
-        # Oblicz cutoff na podstawie szybkości
-        cutoff = self.min_cutoff + self.beta * abs(dx_hat)
-        
-        # Filtruj sygnał główny
-        a = self.smoothing_factor(t_e, cutoff)
-        x_hat = self.exponential_smoothing(a, x, self.x_prev)
-
-        self.x_prev = x_hat
-        self.dx_prev = dx_hat
-        return self.x
 
 class UARTApp:
     def __init__(self, root):
@@ -62,148 +22,205 @@ class UARTApp:
         self.buffer = ""
         
         # --- Konfiguracja ---
-        config_frame = ttk.LabelFrame(root, text="Konfiguracja Połączenia", padding=10)
+        # --- UKŁAD GŁÓWNY (SPLIT) ---
+        main_split = tk.PanedWindow(root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
+        main_split.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # --- LEWY PANEL (Panel Sterowania, Logi, Konfiguracja) ---
+        left_panel_outer = ttk.Frame(main_split, width=400) # Wrapper na canvas scrolla
+        main_split.add(left_panel_outer, minsize=350)
+        
+        # Scrollbar dla lewego panelu (gdyby się nie mieściło)
+        self.left_canvas = tk.Canvas(left_panel_outer)
+        self.left_scrollbar = ttk.Scrollbar(left_panel_outer, orient="vertical", command=self.left_canvas.yview)
+        self.left_scroll_frame = ttk.Frame(self.left_canvas)
+        
+        self.left_scroll_frame.bind(
+            "<Configure>",
+            lambda e: self.left_canvas.configure(
+                scrollregion=self.left_canvas.bbox("all")
+            )
+        )
+        self.left_canvas.create_window((0, 0), window=self.left_scroll_frame, anchor="nw")
+        self.left_canvas.configure(yscrollcommand=self.left_scrollbar.set)
+        
+        self.left_canvas.pack(side="left", fill="both", expand=True)
+        self.left_scrollbar.pack(side="right", fill="y")
+        
+        # 1. KONFIGURACJA (Przeniesiona tutaj)
+        config_frame = ttk.LabelFrame(self.left_scroll_frame, text="Konfiguracja Połączenia", padding=10)
         config_frame.pack(fill="x", padx=10, pady=5)
         
-        # Porty szeregowe
+        # Porty (dwa wiersze w wąskim panelu)
         ttk.Label(config_frame, text="Port:").grid(row=0, column=0, sticky="w")
         self.port = tk.StringVar()
-        self.port_combo = ttk.Combobox(config_frame, textvariable=self.port, width=50)
+        self.port_combo = ttk.Combobox(config_frame, textvariable=self.port, width=25)
         self.port_combo.grid(row=0, column=1, sticky="w", padx=5)
-        
         ttk.Button(config_frame, text="Odśwież", command=self.refresh_ports).grid(row=0, column=2, padx=5)
-        
+
         # Baudrate
-        ttk.Label(config_frame, text="Baudrate:").grid(row=1, column=0, sticky="w", pady=5)
+        ttk.Label(config_frame, text="Baud:").grid(row=1, column=0, sticky="w")
         self.baudrate = tk.StringVar(value="9600")
         self.baudrate_combo = ttk.Combobox(config_frame, textvariable=self.baudrate, 
-                                        values=["9600", "115200", "19200", "38400", "57600"], width=15)
+                                        values=["9600", "115200", "19200", "38400", "57600"], width=10)
         self.baudrate_combo.grid(row=1, column=1, sticky="w", padx=5)
         
-        # Pozostałe ustawienia UART (Data bits, Parity, Stop bits)
-        ttk.Label(config_frame, text="Data bits:").grid(row=0, column=3, sticky="w", padx=5)
-        self.databits = tk.StringVar(value="8")
-        self.databits_combo = ttk.Combobox(config_frame, textvariable=self.databits, values=["5", "6", "7", "8"], width=5)
-        self.databits_combo.grid(row=0, column=4, sticky="w")
-
-        ttk.Label(config_frame, text="Parity:").grid(row=0, column=5, sticky="w", padx=5)
-        self.parity = tk.StringVar(value="None")
-        self.parity_combo = ttk.Combobox(config_frame, textvariable=self.parity, values=["None", "Even", "Odd", "Mark", "Space"], width=8)
-        self.parity_combo.grid(row=0, column=6, sticky="w")
-
-        ttk.Label(config_frame, text="Stop bits:").grid(row=0, column=7, sticky="w", padx=5)
-        self.stopbits = tk.StringVar(value="1")
-        self.stopbits_combo = ttk.Combobox(config_frame, textvariable=self.stopbits, values=["1", "1.5", "2"], width=5)
-        self.stopbits_combo.grid(row=0, column=8, sticky="w")
-        
-        # Przycisk Połącz
+        # Connect btn
         self.connect_button = ttk.Button(config_frame, text="Połącz", command=self.toggle_connection)
-        self.connect_button.grid(row=1, column=8, padx=5, sticky="e")
+        self.connect_button.grid(row=2, column=0, columnspan=3, pady=5, sticky="we")
         
-        # Status
         self.status_label = ttk.Label(config_frame, text="Status: Rozłączony", foreground="red")
-        self.status_label.grid(row=2, column=0, columnspan=9, sticky="w", pady=5)
+        self.status_label.grid(row=3, column=0, columnspan=3, sticky="w")
         
-        self.refresh_ports()
+        # Data bits etc (ukryte/domyślne żeby oszczędzić miejsce lub w submenu - tutaj uproszczone hardcoded w zmiennych, UI opcjonalne)
+        self.databits = tk.StringVar(value="8")
+        self.parity = tk.StringVar(value="None")
+        self.stopbits = tk.StringVar(value="1")
 
-        self.refresh_ports()
 
-        # --- Frame Wyświetlania Odległości (Nowy) ---
-        display_frame = ttk.LabelFrame(root, text="Porównanie Filtrów", padding=10)
+        # 2. STATUS LICZBOWY
+        display_frame = ttk.LabelFrame(self.left_scroll_frame, text="Aktualne Pomiary", padding=10)
         display_frame.pack(fill="x", padx=10, pady=5)
         
-        # Grid
-        display_frame.columnconfigure(0, weight=1)
-        display_frame.columnconfigure(1, weight=1)
-        display_frame.columnconfigure(2, weight=1)
-
-        # 1. RAW
-        ttk.Label(display_frame, text="RAW (Surowe)", font=("Segoe UI", 9), foreground="#00aa00").grid(row=0, column=0)
+        ttk.Label(display_frame, text="RAW:", font=("Segoe UI", 9), foreground="#00aa00").grid(row=0, column=0, sticky="w")
         self.distance_value_var = tk.StringVar(value="---")
         self.distance_display = ttk.Label(display_frame, textvariable=self.distance_value_var, 
-                  font=("Segoe UI", 24, "bold"), foreground="#00aa00")
-        self.distance_display.grid(row=1, column=0)
-        
-        # 2. 1-EURO
-        ttk.Label(display_frame, text="1-EURO (Smart)", font=("Segoe UI", 9, "bold"), foreground="#00aaaa").grid(row=0, column=1)
-        self.filtered_value_var = tk.StringVar(value="---")
-        self.filtered_display = ttk.Label(display_frame, textvariable=self.filtered_value_var, 
-                  font=("Segoe UI", 32, "bold"), foreground="#00aaaa")
-        self.filtered_display.grid(row=1, column=1)
+                  font=("Segoe UI", 16, "bold"), foreground="#00aa00")
+        self.distance_display.grid(row=0, column=1, sticky="e")
 
-        # 3. CASCADE
-        ttk.Label(display_frame, text="CASCADE (1-Euro + EMA)", font=("Segoe UI", 9, "bold"), foreground="#aa00aa").grid(row=0, column=2)
-        self.cascade_value_var = tk.StringVar(value="---")
-        ttk.Label(display_frame, textvariable=self.cascade_value_var, 
-                  font=("Segoe UI", 32, "bold"), foreground="#aa00aa").grid(row=1, column=2)
+        ttk.Label(display_frame, text="FILTERED:", font=("Segoe UI", 9, "bold"), foreground="#0000ff").grid(row=1, column=0, sticky="w")
+        self.stm_filtered_var = tk.StringVar(value="---")
+        ttk.Label(display_frame, textvariable=self.stm_filtered_var, 
+                  font=("Segoe UI", 16, "bold"), foreground="#0000ff").grid(row=1, column=1, sticky="e")
+
+        ttk.Label(display_frame, text="ERROR:", font=("Segoe UI", 9, "bold"), foreground="#ff0000").grid(row=2, column=0, sticky="w")
+        self.error_value_var = tk.StringVar(value="---")
+        ttk.Label(display_frame, textvariable=self.error_value_var,
+                  font=("Segoe UI", 16, "bold"), foreground="#ff0000").grid(row=2, column=1, sticky="e")
+        display_frame.columnconfigure(1, weight=1)
 
 
-        # --- Wysyłanie (Transmit) ---
-        transmit_frame = ttk.LabelFrame(root, text="Wysyłanie Komend", padding=10)
-        transmit_frame.pack(fill="x", padx=10, pady=5)
+        # 3. CONTROL PANEL
+        control_frame = ttk.LabelFrame(self.left_scroll_frame, text="Tuning PID", padding=10)
+        control_frame.pack(fill="x", padx=10, pady=5)
         
-        ttk.Label(transmit_frame, text="Komenda:").grid(row=0, column=0, sticky="w")
-        self.transmit_entry = ttk.Entry(transmit_frame, width=80)
-        self.transmit_entry.grid(row=0, column=1, padx=5)
+        # Setpoint
+        ttk.Label(control_frame, text="Setpoint (mm):").pack(anchor="w")
+        self.setpoint_var = tk.DoubleVar(value=150.0)
+        scale_frame = ttk.Frame(control_frame)
+        scale_frame.pack(fill="x")
+        self.setpoint_scale = tk.Scale(scale_frame, from_=0, to=300, orient="horizontal", variable=self.setpoint_var, command=self.on_setpoint_change)
+        self.setpoint_scale.pack(side="left", fill="x", expand=True)
+        self.setpoint_entry = ttk.Entry(scale_frame, textvariable=self.setpoint_var, width=5)
+        self.setpoint_entry.pack(side="right")
+        self.setpoint_entry.bind('<Return>', lambda e: self.on_setpoint_change(None))
         
-        ttk.Button(transmit_frame, text="Wyślij", command=self.transmit_data).grid(row=0, column=2, padx=5)
+        # Reliable Setpoint sending
+        self.setpoint_scale.bind("<ButtonRelease-1>", lambda e: self.send_setpoint(force=True))
+        
+        # PID
+        # Kp
+        ttk.Label(control_frame, text="Kp:").pack(anchor="w", pady=(5,0))
+        kp_frame = ttk.Frame(control_frame)
+        kp_frame.pack(fill="x")
+        self.kp_var = tk.DoubleVar(value=DEFAULT_KP)
+        self.kp_scale = tk.Scale(kp_frame, from_=-5.0, to=0.0, resolution=0.01, orient="horizontal", variable=self.kp_var, command=self.on_pid_change)
+        self.kp_scale.pack(side="left", fill="x", expand=True)
+        ttk.Entry(kp_frame, textvariable=self.kp_var, width=6).pack(side="right")
+        
+        # Ki
+        ttk.Label(control_frame, text="Ki:").pack(anchor="w")
+        ki_frame = ttk.Frame(control_frame)
+        ki_frame.pack(fill="x")
+        self.ki_var = tk.DoubleVar(value=DEFAULT_KI)
+        self.ki_scale = tk.Scale(ki_frame, from_=-0.01, to=0.0, resolution=0.0001, orient="horizontal", variable=self.ki_var, command=self.on_pid_change)
+        self.ki_scale.pack(side="left", fill="x", expand=True)
+        ttk.Entry(ki_frame, textvariable=self.ki_var, width=6).pack(side="right")
 
-        # --- Główny Frame (Receive + Wykres) ---
-        main_frame = ttk.Frame(root)
-        main_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        # Kd
+        ttk.Label(control_frame, text="Kd:").pack(anchor="w")
+        kd_frame = ttk.Frame(control_frame)
+        kd_frame.pack(fill="x")
+        self.kd_var = tk.DoubleVar(value=DEFAULT_KD)
+        self.kd_scale = tk.Scale(kd_frame, from_=-1000.0, to=0.0, resolution=1.0, orient="horizontal", variable=self.kd_var, command=self.on_pid_change)
+        self.kd_scale.pack(side="left", fill="x", expand=True)
+        ttk.Entry(kd_frame, textvariable=self.kd_var, width=6).pack(side="right")
         
-        # --- Terminal (Lewa strona) ---
-        receive_frame = ttk.LabelFrame(main_frame, text="Terminal (Odebrane dane)", padding=10)
-        receive_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        # BINDINGS FOR RELIABLE SENDING
+        self.kp_scale.bind("<ButtonRelease-1>", lambda e: self.send_pid(force=True))
+        self.ki_scale.bind("<ButtonRelease-1>", lambda e: self.send_pid(force=True))
+        self.kd_scale.bind("<ButtonRelease-1>", lambda e: self.send_pid(force=True))
         
-        self.receive_text = scrolledtext.ScrolledText(receive_frame, height=10, width=30, state="disabled", font=("Consolas", 9))
+        ttk.Button(control_frame, text="Wyślij Parametry", command=lambda: self.send_all_params(force=True)).pack(fill="x", pady=10)
+
+
+        # 4. LOGI TERMINAL
+        term_frame = ttk.LabelFrame(self.left_scroll_frame, text="Terminal", padding=5)
+        term_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        self.receive_text = scrolledtext.ScrolledText(term_frame, height=15, width=30, state="disabled", font=("Consolas", 8))
         self.receive_text.pack(fill="both", expand=True)
         
-        ttk.Button(receive_frame, text="Wyczyść", command=self.clear_receive).pack(side="left", pady=5)
-        
-        # --- Wykres (Prawa strona) ---
-        chart_frame = ttk.LabelFrame(main_frame, text="Wykres Przebiegu", padding=10)
-        chart_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
-        
-        # Ustawienia wykresu
-        axis_frame = ttk.Frame(chart_frame)
-        axis_frame.pack(fill="x", pady=(0, 10))
-        
-        ttk.Label(axis_frame, text="Tytuł:").pack(side="left", padx=5)
-        self.title_label = tk.StringVar(value="Odległość w czasie")
-        ttk.Entry(axis_frame, textvariable=self.title_label, width=20).pack(side="left", padx=5)
-        
-        self.chart_enabled = tk.BooleanVar(value=True)
-        self.chart_button = ttk.Button(axis_frame, text="Stop Wykres", command=self.toggle_chart)
-        self.chart_button.pack(side="left", padx=5)
-        
-        ttk.Button(axis_frame, text="Resetuj Wykres", command=self.clear_chart).pack(side="left", padx=5)
+        send_frame = ttk.Frame(term_frame)
+        send_frame.pack(fill="x", pady=5)
+        self.transmit_entry = ttk.Entry(send_frame)
+        self.transmit_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(send_frame, text=">", width=4, command=self.transmit_data).pack(side="right")
+        ttk.Button(term_frame, text="Wyczyść", command=self.clear_receive).pack(anchor="w")
 
-        # --- Kanwa Wykresu (Bez Matplotlib) ---
-        # Używamy zwykłego Canvas, bo Matplotlib/Numpy sypie błędami na Twojej wersji Pythona
-        self.canvas_width = 600
-        self.canvas_height = 400
-        self.chart_bg_color = "#1e1e1e"
-        self.chart_line_color = "#00ff00"
+
+        # --- PRAWY PANEL (Wykresy) ---
+        right_panel = ttk.Frame(main_split)
+        main_split.add(right_panel, stretch="always")
         
-        self.canvas = tk.Canvas(chart_frame, bg=self.chart_bg_color, height=self.canvas_height)
-        self.canvas.pack(fill="both", expand=True)
-        self.canvas.bind("<Configure>", self.on_canvas_resize)
+        # Pasek narzędzi wykresu
+        chart_tools = ttk.Frame(right_panel)
+        chart_tools.pack(fill="x", padx=5, pady=5)
+        
+        ttk.Label(chart_tools, text="Wykresy:").pack(side="left")
+        self.chart_enabled = tk.BooleanVar(value=True)
+        self.chart_button = ttk.Button(chart_tools, text="Stop", command=self.toggle_chart)
+        self.chart_button.pack(side="left", padx=5)
+        ttk.Button(chart_tools, text="Reset", command=self.clear_chart).pack(side="left", padx=5)
+        
+        # Kontener na wykresy (Split w pionie)
+        self.charts_frame = tk.PanedWindow(right_panel, orient=tk.VERTICAL, sashrelief=tk.RAISED)
+        self.charts_frame.pack(fill="both", expand=True)
+
+        self.chart_bg_color = "#1e1e1e"
+        
+        # 1. Canvas Distance
+        self.frame_dist = ttk.Frame(self.charts_frame)
+        self.charts_frame.add(self.frame_dist, height=300) # Startowa wysokość
+        self.canvas_dist = tk.Canvas(self.frame_dist, bg=self.chart_bg_color)
+        self.canvas_dist.pack(fill="both", expand=True)
+        self.canvas_dist.bind("<Configure>", lambda e: self.draw_chart_dist())
+
+        # 2. Canvas Error
+        self.frame_err = ttk.Frame(self.charts_frame)
+        self.charts_frame.add(self.frame_err, height=150)
+        self.canvas_err = tk.Canvas(self.frame_err, bg=self.chart_bg_color)
+        self.canvas_err.pack(fill="both", expand=True)
+        self.canvas_err.bind("<Configure>", lambda e: self.draw_chart_err())
+
+        # 3. Canvas Control (Angle/Output)
+        self.frame_ctrl = ttk.Frame(self.charts_frame)
+        self.charts_frame.add(self.frame_ctrl, height=150)
+        self.canvas_ctrl = tk.Canvas(self.frame_ctrl, bg=self.chart_bg_color)
+        self.canvas_ctrl.pack(fill="both", expand=True)
+        self.canvas_ctrl.bind("<Configure>", lambda e: self.draw_chart_ctrl())
+        
+        self.refresh_ports()
 
         # Zmienne danych dla Canvas
         self.data_history = [] # Raw
-        self.data_history_filtered = [] # 1-Euro
-        self.data_history_cascade = [] # Cascade (1-Euro + EMA)
+        self.data_history_stm = [] # STM32 Filtered (F:)
+        self.data_history_setpoint = [] # Setpoint history
+        self.data_history_error = [] # Error history (E:)
+        self.data_history_ctrl = [] # Control/Angle history (A:)
+        
         self.max_history = 200 
         self.sample_counter = 0
-        
-        # Filtry Init
-        self.start_time = time.time()
-        self.one_euro = OneEuroFilter(min_cutoff=0.1, beta=0.1, d_cutoff=1.0)
-        
-        # Post-Processing EMA (na wyjściu 1-Euro)
-        self.post_ema_val = None
-        self.post_ema_alpha = 0.6 # 0.6 = Dość szybki, ale wygładza końcówkę
         
         # Clamp (Ograniczenie fizyczne belki)
         self.clamp_min = 0
@@ -214,9 +231,8 @@ class UARTApp:
         self.read_thread.start()
     
     def on_canvas_resize(self, event):
-        self.canvas_width = event.width
-        self.canvas_height = event.height
-        self.draw_chart()
+        # Deprecated logic - now individual binds handle this
+        pass
 
     def refresh_ports(self):
         ports = []
@@ -287,8 +303,65 @@ class UARTApp:
                 self.log_message(f"[TX] {data}\n")
                 self.transmit_entry.delete(0, tk.END)
             except Exception as e:
-                self.log_message(f"[Error] {e}\n")
-    
+                self.log_message(f"[Error] {e}\n")    
+        # Debouncing dla sliderów (żeby nie zapchać UARTu)
+        self.last_pid_send_time = 0
+        self.last_setpoint_send_time = 0
+
+    def on_setpoint_change(self, event):
+        if time.time() - self.last_setpoint_send_time > 0.1:
+            self.send_setpoint()
+            self.last_setpoint_send_time = time.time()
+            
+    def on_pid_change(self, event):
+        if time.time() - self.last_pid_send_time > 0.2:
+            self.send_pid()
+            self.last_pid_send_time = time.time()
+
+    def send_all_params(self, force=False):
+        self.send_setpoint(force=force)
+        time.sleep(0.05)
+        self.send_pid(force=force)
+
+    def send_setpoint(self, force=False):
+        if not self.serial or not self.running: 
+            return
+            
+        if not force and (time.time() - self.last_setpoint_send_time < 0.1):
+            return
+
+        try:
+            val = self.setpoint_var.get()
+            cmd = f"SET:{val:.1f}"
+            crc = self.calculate_crc8(cmd)
+            msg = f"{cmd};C:{crc:02X}"
+            self.serial.write((msg + '\n').encode())
+            # self.log_message(f"[CMD] {msg}\n")
+            self.last_setpoint_send_time = time.time()
+        except: pass
+
+    def send_pid(self, force=False):
+        if not self.serial or not self.running: 
+            return # self.log_message("[DEBUG] Serial not ready\n")
+            
+        # Debounce check skipping if force=True
+        if not force and (time.time() - self.last_pid_send_time < 0.2):
+            return
+
+        try:
+            # Format: PID:Kp;Ki;Kd
+            kp = self.kp_var.get()
+            ki = self.ki_var.get()
+            kd = self.kd_var.get()
+            cmd = f"PID:{kp:.4f};{ki:.5f};{kd:.1f}"
+            crc = self.calculate_crc8(cmd)
+            msg = f"{cmd};C:{crc:02X}"
+            self.serial.write((msg + '\n').encode())
+            self.log_message(f"[PID update] {cmd}\n")
+            self.last_pid_send_time = time.time()
+        except Exception as e:
+            self.log_message(f"[Python Error] {e}\n")
+
     def read_loop(self):
         while True:
             try:
@@ -327,29 +400,85 @@ class UARTApp:
         label = "Stop Wykres" if self.chart_enabled.get() else "Start Wykres"
         self.chart_button.config(text=label)
     
+    def calculate_crc8(self, text):
+        """Oblicza CRC8 (wielomian 0x07) dla zadanego stringa."""
+        crc = 0x00
+        for char in text:
+            byte = ord(char)
+            crc ^= byte
+            for _ in range(8):
+                if crc & 0x80:
+                    crc = (crc << 1) ^ 0x07
+                else:
+                    crc <<= 1
+                crc &= 0xFF
+        return crc
+
     def update_chart(self, value_str):
-        # Logika parsowania
+        # Format oczekiwany: "D:123;A:100;C:AB" lub "D:123;A:100;F:120;E:10.5;C:AB"
         val_y = None
+        val_f = None # STM Filtered
+        val_e = None # Error
+        val_a = None # Angle/Control
+        current_crc = None
+        data_part = None
         
-        # Próba sparsowania
         try:
-            clean_str = value_str.lower().replace("mm", "").replace("distance:", "").strip()
-            val_y = float(clean_str)
-        except ValueError:
-            # Sprawdź format csv
-            if ',' in value_str:
-                try:
-                    parts = value_str.split(',')
-                    val_y = float(parts[1]) # Zakładamy że druga wartość to Y
-                except (ValueError, IndexError):
-                    pass
+            # 1. Sprawdź czy mamy CRC w ramce
+            if ";C:" in value_str:
+                parts = value_str.split(";C:")
+                if len(parts) == 2:
+                    data_part = parts[0]
+                    crc_str = parts[1].strip()
+                    
+                    # 2. Policz CRC lokalnie
+                    calculated_crc = self.calculate_crc8(data_part)
+                    received_crc = int(crc_str, 16)
+                    
+                    if calculated_crc != received_crc:
+                        self.log_message(f"[CRC ERROR] Calc:{calculated_crc:02X} != Recv:{received_crc:02X}\n")
+                        return # Odrzucamy ramkę
+                    
+                    # 3. Parsuj dane (D:xxx;A:yyy)
+                    # Szukamy D:
+                    segments = data_part.split(";")
+                    for seg in segments:
+                        if seg.startswith("D:"):
+                            val_y = float(seg.replace("D:", ""))
+                        elif seg.startswith("F:"):
+                            val_f = float(seg.replace("F:", ""))
+                        elif seg.startswith("E:"):
+                            val_e = float(seg.replace("E:", ""))
+                        elif seg.startswith("A:"):
+                            val_a = float(seg.replace("A:", ""))
+            
+            else:
+                # Fallback dla starego formatu (bez CRC)
+                clean_str = value_str.lower().replace("mm", "").replace("distance:", "").strip()
+                # Jeśli to CSV np D:123 A:456
+                if "d:" in clean_str:
+                     # Proste szukanie liczby po D:
+                     import re
+                     match = re.search(r"d:(\d+)", clean_str)
+                     if match:
+                         val_y = float(match.group(1))
+                else:
+                    val_y = float(clean_str)
+
+        except Exception as e:
+            # self.log_message(f"[Parse Error] {e}\n")
+            pass
         
         if val_y is not None:
             # --- CLAMPING (Ograniczenie zakresu) ---
             val_y = max(self.clamp_min, min(val_y, self.clamp_max))
 
-            # 1. Update Wyświetlacza
+            # 2. Update Wyświetlacza
             self.distance_value_var.set(f"{val_y:.0f}")
+            if val_f is not None:
+                self.stm_filtered_var.set(f"{val_f:.0f}")
+            if val_e is not None:
+                self.error_value_var.set(f"{val_e:.1f}")
             
             # Kolory
             if val_y < 50:
@@ -359,125 +488,157 @@ class UARTApp:
             else:
                 self.distance_display.config(foreground="#2ecc71") # Green (Środek)
 
-            # --- 1-EURO FILTER ---
-            current_time = time.time() - self.start_time
-            filtered_val = self.one_euro.filter(current_time, val_y)
-            self.filtered_value_var.set(f"{filtered_val:.0f}")
-
-            # --- CASCADE (POST-EMA) ---
-            if self.post_ema_val is None:
-                self.post_ema_val = filtered_val
-            
-            # EMA na wyniku z 1-Euro
-            self.post_ema_val = (self.post_ema_alpha * filtered_val) + ((1 - self.post_ema_alpha) * self.post_ema_val)
-            self.cascade_value_var.set(f"{self.post_ema_val:.0f}")
-
             # 2. Update Wykresu
             if self.chart_enabled.get():
                 self.data_history.append(val_y)
-                self.data_history_filtered.append(filtered_val)
-                self.data_history_cascade.append(self.post_ema_val)
+                self.data_history_stm.append(val_f if val_f is not None else val_y) # STM Filtered
+                self.data_history_setpoint.append(self.setpoint_var.get())
                 
+                # Jeśli dostaliśmy E z STM to użyjmy, jak nie to policzmy
+                if val_e is not None:
+                    self.data_history_error.append(val_e)
+                else:
+                    self.data_history_error.append(self.setpoint_var.get() - (val_f if val_f else val_y))
+                
+                # Control/Angle
+                if val_a is not None:
+                    self.data_history_ctrl.append(val_a)
+                elif self.data_history_ctrl:
+                    self.data_history_ctrl.append(self.data_history_ctrl[-1]) # Powtrzamy ostatni
+                else:
+                    self.data_history_ctrl.append(0)
+
                 # Utrzymaj rozmiar bufora
                 if len(self.data_history) > self.max_history:
                     self.data_history.pop(0)
-                    self.data_history_filtered.pop(0)
-                    self.data_history_cascade.pop(0)
+                    self.data_history_stm.pop(0)
+                    self.data_history_setpoint.pop(0)
+                    self.data_history_error.pop(0)
+                    if self.data_history_ctrl: self.data_history_ctrl.pop(0)
                 
-                self.draw_chart()
+                self.draw_charts()
 
-    def draw_chart(self):
-        """Rysuje wykres ręcznie na płótnie Canvas"""
-        self.canvas.delete("all")
-        
-        if not self.data_history:
-            return
+    def draw_charts(self):
+        self.draw_chart_dist()
+        self.draw_chart_err()
+        self.draw_chart_ctrl()
 
-        w = self.canvas_width
-        h = self.canvas_height
+    def draw_chart_dist(self):
+        self.canvas_dist.delete("all")
+        if not self.data_history: return
         
-        # Znadź min/max żeby przeskalować
-        min_y = min(self.data_history)
-        max_y = max(self.data_history)
-        
-        if min_y == max_y:
-            min_y -= 10
-            max_y += 10
+        w = self.canvas_dist.winfo_width()
+        h = self.canvas_dist.winfo_height()
         
         # Marginesy
-        margin_top = 20
-        margin_bottom = 20
-        plot_h = h - margin_top - margin_bottom
-        range_y = max_y - min_y
+        margin = 20
+        h_draw = h - 2 * margin
         
-        # Rysuj linię
-        points = []
-        n_points = len(self.data_history)
+        min_y = 0 
+        max_y = 300 
+        # Dynamiczne skalowanie jeśli wyjdzie poza
+        curr_max = max(max(self.data_history), max(self.data_history_setpoint))
+        if curr_max > max_y: max_y = curr_max + 20
         
-        # Odstęp między punktami
+        range_y = max_y - min_y if max_y != min_y else 1
         step_x = w / (self.max_history - 1) if self.max_history > 1 else w
         
+        def get_y(val):
+            rel = (val - min_y) / range_y
+            return (margin + h_draw) - (rel * h_draw)
+
+        # Rysuj Setpoint (Yellow)
+        pts_set = []
+        for i, val in enumerate(self.data_history_setpoint):
+            pts_set.extend([i * step_x, get_y(val)])
+        if len(pts_set) >= 4: self.canvas_dist.create_line(pts_set, fill="#ffff00", width=2, dash=(4, 2))
+
+        # Rysuj STM Filtered (Blue)
+        pts_stm = []
+        for i, val in enumerate(self.data_history_stm):
+            pts_stm.extend([i * step_x, get_y(val)])
+        if len(pts_stm) >= 4: self.canvas_dist.create_line(pts_stm, fill="#0000ff", width=2, smooth=True)
+            
+        # Rysuj Raw (Green)
+        pts_raw = []
         for i, val in enumerate(self.data_history):
-            # Skalowanie Y: odwracamy, bo w Canvas Y=0 jest na górze
-            # Wartość (val - min_y) / range_y to procent wysokości (0..1)
-            # Chcemy żeby max_y było na górze (małe Y w Canvas)
-            
-            rel_y = (val - min_y) / range_y
-            y_pos = h - margin_bottom - (rel_y * plot_h)
-            
-            x_pos = i * step_x
-            points.append(x_pos)
-            points.append(y_pos)
+            pts_raw.extend([i * step_x, get_y(val)])
+        if len(pts_raw) >= 4: self.canvas_dist.create_line(pts_raw, fill="#00ff00", width=1, dash=(2, 4))
         
-        if len(points) >= 4:
-            # Rysuj linię RAW (zielona, cienka, nieco przezroczysta - symulowana kropkowaniem lub kolorem)
-            self.canvas.create_line(points, fill="#00ff00", width=1, dash=(2, 4))
-            
-        # --- Rysuj linię 1-Euro (Cyan, Gruba) ---
-        if self.data_history_filtered:
-            points_filt = []
-            for i, val in enumerate(self.data_history_filtered):
-                rel_y = (val - min_y) / range_y
-                y_pos = h - margin_bottom - (rel_y * plot_h)
-                x_pos = i * step_x
-                points_filt.append(x_pos)
-                points_filt.append(y_pos)
-            
-            if len(points_filt) >= 4:
-                self.canvas.create_line(points_filt, fill="#00ffff", width=3, smooth=True)
-
-        # --- Rysuj linię CASCADE (Magenta, Gruba) ---
-        if self.data_history_cascade:
-            points_cas = []
-            for i, val in enumerate(self.data_history_cascade):
-                rel_y = (val - min_y) / range_y
-                y_pos = h - margin_bottom - (rel_y * plot_h)
-                x_pos = i * step_x
-                points_cas.append(x_pos)
-                points_cas.append(y_pos)
-            
-            if len(points_cas) >= 4:
-                self.canvas.create_line(points_cas, fill="#ffa500", width=3, smooth=True)
-
         # Legenda
-        self.canvas.create_text(w-10, 10, text="Raw (STM32)", fill="#00ff00", anchor="ne", font=("Arial", 8))
-        self.canvas.create_text(w-10, 25, text="1-Euro Filter", fill="#00ffff", anchor="ne", font=("Arial", 8))
-        self.canvas.create_text(w-10, 40, text="Cascade (1E+EMA)", fill="#ff00ff", anchor="ne", font=("Arial", 9, "bold"))
-            
-        # Rysuj siatkę / tekst
-        self.canvas.create_text(10, 10, text=f"Max: {max_y:.0f}", fill="white", anchor="nw")
-        self.canvas.create_text(10, h-10, text=f"Min: {min_y:.0f}", fill="white", anchor="sw")
+        self.canvas_dist.create_text(10, 5, text="Distance (mm)", fill="white", anchor="nw", font=("Arial", 10, "bold"))
+        self.canvas_dist.create_text(w-50, 5, text=f"{self.data_history[-1]:.0f}", fill="#00ff00", anchor="ne", font=("Arial", 9))
+
+    def draw_chart_err(self):
+        self.canvas_err.delete("all")
+        if not self.data_history_error: return
+        w = self.canvas_err.winfo_width()
+        h = self.canvas_err.winfo_height()
+        margin = 15
+        h_draw = h - 2 * margin
+        
+        max_err_abs = max([abs(e) for e in self.data_history_error])
+        limit_err = max(30, max_err_abs + 5)
+        
+        step_x = w / (self.max_history - 1) if self.max_history > 1 else w
+        
+        def get_y(val):
+            rel = (val + limit_err) / (2*limit_err)
+            return (margin + h_draw) - (rel * h_draw)
+
+        # Oś zero
+        y_zero = get_y(0)
+        self.canvas_err.create_line(0, y_zero, w, y_zero, fill="#555555", dash=(2, 2))
+
+        pts_err = []
+        for i, val in enumerate(self.data_history_error):
+            pts_err.extend([i * step_x, get_y(val)])
+        if len(pts_err) >= 4: self.canvas_err.create_line(pts_err, fill="#ff4444", width=2)
+        
+        self.canvas_err.create_text(10, 5, text="Error (mm)", fill="#ff4444", anchor="nw", font=("Arial", 10, "bold"))
+
+    def draw_chart_ctrl(self):
+        self.canvas_ctrl.delete("all")
+        if not self.data_history_ctrl: return
+        w = self.canvas_ctrl.winfo_width()
+        h = self.canvas_ctrl.winfo_height()
+        margin = 15
+        h_draw = h - 2 * margin
+        
+        # Zakres dla serwa/kąta? Zakładam np 0-180 albo -90..90
+        # Dynamiczny
+        vals = self.data_history_ctrl
+        min_v = min(vals)
+        max_v = max(vals)
+        if max_v - min_v < 10: 
+            min_v -= 5
+            max_v += 5
+        
+        step_x = w / (self.max_history - 1) if self.max_history > 1 else w
+        
+        def get_y(val):
+            if max_v == min_v: return h/2
+            rel = (val - min_v) / (max_v - min_v)
+            return (margin + h_draw) - (rel * h_draw)
+
+        pts = []
+        for i, val in enumerate(vals):
+            pts.extend([i * step_x, get_y(val)])
+        if len(pts) >= 4: self.canvas_ctrl.create_line(pts, fill="#00ffff", width=2)
+        
+        self.canvas_ctrl.create_text(10, 5, text="Control Signal (Angle)", fill="#00ffff", anchor="nw", font=("Arial", 10, "bold"))
+        self.canvas_ctrl.create_text(w-50, 5, text=f"{vals[-1]:.1f}", fill="#00ffff", anchor="ne", font=("Arial", 9))
 
     def clear_chart(self):
         self.data_history = []
-        self.data_history_filtered = []
-        self.data_history_cascade = []
-        self.post_ema_val = None
-        self.start_time = time.time()
-        self.draw_chart()
+        self.data_history_stm = []
+        self.data_history_setpoint = []
+        self.data_history_error = []
+        self.data_history_ctrl = []
+        self.draw_charts()
         self.distance_value_var.set("---")
-        self.filtered_value_var.set("---")
-        self.cascade_value_var.set("---")
+        self.stm_filtered_var.set("---")
+        self.error_value_var.set("---")
 
 if __name__ == "__main__":
     root = tk.Tk()
