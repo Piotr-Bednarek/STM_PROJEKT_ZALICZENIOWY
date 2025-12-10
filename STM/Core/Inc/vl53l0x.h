@@ -27,5 +27,7 @@ typedef struct {
 uint8_t VL53L0X_Init(VL53L0X_Dev_t *dev, I2C_HandleTypeDef *hi2c);
 void VL53L0X_SetOffset(VL53L0X_Dev_t *dev, int16_t offset);
 uint16_t VL53L0X_ReadDistance(VL53L0X_Dev_t *dev);
+uint8_t VL53L0X_GetRangeStatus(VL53L0X_Dev_t *dev);
+
 
 #endif /* __VL53L0X_H */
