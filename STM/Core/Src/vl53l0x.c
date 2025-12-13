@@ -303,4 +303,3 @@ uint8_t VL53L0X_GetRangeStatus(VL53L0X_Dev_t *dev) {
 
 // Internal function to perform Reference Calibration (VHV/Phase)
 // This is critical for avoiding "Phase Fail" or constant error readings
-
