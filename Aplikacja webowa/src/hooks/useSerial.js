@@ -10,7 +10,7 @@ export const useSerial = () => {
         filtered: 0,
         error: 0,
         control: 0,
-        setpoint: 0,
+        setpoint: 150,
     });
 
     const readerRef = useRef(null);
@@ -44,70 +44,72 @@ export const useSerial = () => {
         return crc;
     };
 
-    const processLine = useCallback(
-        (line) => {
-            // Expected format: D:123;A:100;F:120;E:10.5;C:AB
-            // Or without CRC check if older format
-            // Validation
-            let valid = false;
-            let payload = line;
+    // Refs for holding data without causing re-renders immediately
+    const latestDataRef = useRef({ distance: 0, filtered: 0, error: 0, control: 0, setpoint: 150 });
+    const newDataAvailableRef = useRef(false);
 
-            if (line.includes(";C:")) {
-                const parts = line.split(";C:");
-                if (parts.length === 2) {
-                    const dataPart = parts[0];
-                    const crcRecv = parseInt(parts[1], 16);
-                    const crcCalc = calculateCRC8(dataPart);
+    // Throttled update loop
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (newDataAvailableRef.current) {
+                // Clone stats to trigger re-render
+                const snap = { ...latestDataRef.current };
+                setLatestData(snap);
 
-                    if (crcCalc === crcRecv) {
-                        valid = true;
-                        payload = dataPart;
-                    } else {
-                        // log(`CRC Error: ${line}`, 'error');
-                    }
-                }
-            } else {
-                // Fallback (allow if desired, or strict mode)
-                // valid = true;
-            }
-
-            if (valid) {
-                const newData = { ...latestData };
-                const segments = payload.split(";");
-                let updated = false;
-
-                segments.forEach((seg) => {
-                    if (seg.startsWith("D:")) {
-                        let val = parseFloat(seg.substring(2));
-                        // Clamp 0-280 as per Python app
-                        val = Math.max(0, Math.min(val, 280));
-                        newData.distance = val;
-                        updated = true;
-                    } else if (seg.startsWith("F:")) {
-                        newData.filtered = parseFloat(seg.substring(2));
-                        updated = true;
-                    } else if (seg.startsWith("E:")) {
-                        newData.error = parseFloat(seg.substring(2));
-                        updated = true;
-                    } else if (seg.startsWith("A:")) {
-                        newData.control = parseFloat(seg.substring(2));
-                        updated = true;
-                    }
+                setDataHistory((prev) => {
+                    const newHist = [...prev, { ...snap, timestamp: Date.now() }];
+                    if (newHist.length > MAX_HISTORY) return newHist.slice(newHist.length - MAX_HISTORY);
+                    return newHist;
                 });
 
-                if (updated) {
-                    setLatestData((prev) => ({ ...prev, ...newData })); // Update current view
+                newDataAvailableRef.current = false;
+            }
+        }, 50); // Update GUI at 20 FPS max
 
-                    setDataHistory((prev) => {
-                        const newHist = [...prev, { ...newData, timestamp: Date.now() }];
-                        if (newHist.length > MAX_HISTORY) return newHist.slice(-MAX_HISTORY);
-                        return newHist;
-                    });
+        return () => clearInterval(interval);
+    }, []);
+
+    const processLine = useCallback((line) => {
+        // ... (Parsing logic same as before, but updates ref)
+        let valid = false;
+        let payload = line;
+
+        if (line.includes(";C:")) {
+            const parts = line.split(";C:");
+            if (parts.length === 2) {
+                const dataPart = parts[0];
+                const crcRecv = parseInt(parts[1], 16);
+                const crcCalc = calculateCRC8(dataPart);
+                if (crcCalc === crcRecv) {
+                    valid = true;
+                    payload = dataPart;
                 }
             }
-        },
-        [latestData]
-    );
+        }
+
+        if (valid) {
+            // Update Ref directly (fast, no render)
+            const segments = payload.split(";");
+            const currentFnData = latestDataRef.current; // access ref
+
+            segments.forEach((seg) => {
+                if (seg.startsWith("D:")) {
+                    currentFnData.distance = Math.max(0, Math.min(parseFloat(seg.substring(2)), 300));
+                } else if (seg.startsWith("F:")) {
+                    currentFnData.filtered = parseFloat(seg.substring(2));
+                } else if (seg.startsWith("E:")) {
+                    currentFnData.error = parseFloat(seg.substring(2));
+                } else if (seg.startsWith("A:")) {
+                    currentFnData.control = parseFloat(seg.substring(2));
+                }
+            });
+            // We assume Setpoint is handled via sendSetpoint optimistically,
+            // OR if STM sends it back, update it here too.
+            // For now, keep existing setpoint.
+
+            newDataAvailableRef.current = true;
+        }
+    }, []);
 
     const connect = async () => {
         if (!navigator.serial) {
@@ -269,7 +271,9 @@ export const useSerial = () => {
     const sendSetpoint = (val) => {
         // Format: SET:150.0
         sendCommand(`SET:${val.toFixed(1)}`);
-        setLatestData((prev) => ({ ...prev, setpoint: val })); // Optimistic update of local setpoint ref
+        // Update both Reace state (optimistic) AND Ref (so loop doesn't overwrite it with 0)
+        latestDataRef.current.setpoint = val;
+        setLatestData((prev) => ({ ...prev, setpoint: val }));
     };
 
     const sendPid = (kp, ki, kd) => {

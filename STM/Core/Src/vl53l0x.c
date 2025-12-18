@@ -8,17 +8,17 @@
 
 // Helpers
 static void WriteByte(VL53L0X_Dev_t *dev, uint8_t reg, uint8_t val) {
-    HAL_I2C_Mem_Write(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+    HAL_I2C_Mem_Write(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, &val, 1, 1000);
 }
 
 static uint8_t ReadByte(VL53L0X_Dev_t *dev, uint8_t reg) {
     uint8_t val = 0;
-    HAL_I2C_Mem_Read(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+    HAL_I2C_Mem_Read(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, &val, 1, 1000);
     return val;
 }
 
 static void WriteMulti(VL53L0X_Dev_t *dev, uint8_t reg, uint8_t *data, uint16_t size) {
-	HAL_I2C_Mem_Write(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, data, size, 100);
+	HAL_I2C_Mem_Write(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, data, size, 1000);
 }
 
 // Default tuning settings
@@ -121,36 +121,8 @@ static void VL53L0X_SetReferenceSpads(VL53L0X_Dev_t *dev, uint8_t count, uint8_t
     uint8_t refConfig = ReadByte(dev, 0x83);
     WriteByte(dev, 0x83, refConfig & ~0x04); // Disable SPADs
     
-    // Choose the SPAD map based on aperture/non-aperture
-    // This is a simplified map-building logic closest to Pololu's implementation
     uint8_t first_spad_to_enable = (is_aperture) ? 12 : 0;
     uint8_t spads_enabled = 0;
-    
-    for (uint8_t i = 0; i < 48; i++) {
-        if (i < first_spad_to_enable || spads_enabled == count) {
-            // This SPAD is NO
-        } else {
-            // This SPAD is YES
-            spads_enabled++;
-            uint8_t reg = 0;
-            if (i < 8) reg = 0x80; // GLOBAL_CONFIG_SPAD_ENABLES_REF_0
-            else if (i < 16) reg = 0x81;
-            else if (i < 24) reg = 0x82;
-            else if (i < 32) reg = 0x83;
-            else if (i < 40) reg = 0x84;
-            else reg = 0x85;
-            
-            // Re-read to modify? No, just OR it in. Actually we should assume cleared.
-            // Simplified: Just write to 83 for enable? NO.
-            // We need to write to specific registers 0x80..0x85.
-            
-            // NOTE: Due to complexity, we will assume strict clearing and setting.
-            // But since this is tricky, let's use a cleaner method: 
-            // Write 0 to all 6 REF registers first.
-        }
-    }
-    
-    // Cleaner implementation:
     uint8_t spad_map[6] = {0,0,0,0,0,0};
     
     for(uint8_t i=0; i<48; i++) {
@@ -162,9 +134,7 @@ static void VL53L0X_SetReferenceSpads(VL53L0X_Dev_t *dev, uint8_t count, uint8_t
     
     WriteByte(dev, 0xFF, 0x01);
     WriteByte(dev, 0x00, 0x00);
-    WriteByte(dev, 0xFF, 0x00); // 0x80 is in 0x00? No, 0x80 is global enabled refs.
-    // Wait, the registers 0x80-0x85 for SPAD map are in a specific page?
-    // Pololu says: write to 0x80..0x85
+    WriteByte(dev, 0xFF, 0x00); 
     
     WriteMulti(dev, 0x80, spad_map, 6); // Write all 6 bytes
     
@@ -184,7 +154,7 @@ uint8_t VL53L0X_Init(VL53L0X_Dev_t *dev, I2C_HandleTypeDef *hi2c) {
     dev->offset_mm = 0;
 
     // Soft Reset
-    WriteByte(dev, 0x80, 0x00); // 
+    WriteByte(dev, 0x80, 0x00); 
     HAL_Delay(5);
     WriteByte(dev, 0x80, 0x01);
     HAL_Delay(5);
@@ -211,11 +181,9 @@ uint8_t VL53L0X_Init(VL53L0X_Dev_t *dev, I2C_HandleTypeDef *hi2c) {
     uint8_t spad_count;
     uint8_t spad_type_is_aperture;
     if (!VL53L0X_PerformRefSpadManagement(dev, &spad_count, &spad_type_is_aperture)) {
-        // Fallback or fail? 
-        // Let's fallback to defaults to keep going.
-        spad_count = 5; // Reasonable default
-        spad_type_is_aperture = 0; // Reasonable default
-        // return 0; // Previously failed here
+    	// Fallback to reasonable defaults?
+    	spad_count = 5; 
+        spad_type_is_aperture = 0;
     }
 
     // Load Tuning Settings
@@ -227,30 +195,28 @@ uint8_t VL53L0X_Init(VL53L0X_Dev_t *dev, I2C_HandleTypeDef *hi2c) {
     // Perform Reference Calibration (VHV + Phase)
     VL53L0X_PerformRefCalibration(dev);
 
-    // Set Signal Rate Limit to 0.25 MCPS (0.25 * 128 = 32 = 0x20)
-    // Avoids finding false targets in noise or triggering SNR error on weak signals
+    // Set Signal Rate Limit to 0.25 MCPS
     WriteByte(dev, 0x44, 0x00);
     WriteByte(dev, 0x45, 0x20);
     
-    // Set System Sequence Config (Measure only range)
-    // 0xE8: VHV (bit 1) + Phase (bit 2) + HW (bit 3) + Final Range (bit 4) ? 
-    // Actually 0xE8 is standard.
-    // Ensure 0x01 is 0xE8 (already done in PerformRefCalibration but let's confirm)
+    // Set System Sequence Config
     WriteByte(dev, 0x01, 0xE8);
 
     // Set interrupt config to new sample ready
-    WriteByte(dev, 0x0A, 0x04); // SYSTEM_INTERRUPT_CONFIG_GPIO set to NEW_SAMPLE_READY
-    
-    // Set Measurement Timing Budget (simplified)
-    // Sequence Step Enables (0x01) -> 0xE8
-    // Sequence Step Timeouts... (using defaults)
+    WriteByte(dev, 0x0A, 0x04);
 
+    // Set Measurement Timing Budget (Enable sequence steps)
+    // Start Continuous Back-to-Back Mode
+    WriteByte(dev, 0x80, 0x01);
     WriteByte(dev, 0xFF, 0x01);
     WriteByte(dev, 0x00, 0x00);
-    WriteByte(dev, 0xFF, 0x01);
-    WriteByte(dev, 0x00, 0x00);
+    WriteByte(dev, 0x91, 0x3C);
+    WriteByte(dev, 0x00, 0x01);
     WriteByte(dev, 0xFF, 0x00);
+    WriteByte(dev, 0x80, 0x00);
 
+    WriteByte(dev, VL53L0X_REG_SYSRANGE_START, 0x02); // 0x02 = Continuous, 0x01 = Single
+    
     return 1;
 }
 
@@ -259,40 +225,31 @@ void VL53L0X_SetOffset(VL53L0X_Dev_t *dev, int16_t offset) {
 }
 
 uint16_t VL53L0X_ReadDistance(VL53L0X_Dev_t *dev) {
-    // Write 0x01 to REG 0x00 to successfully start Single Shot
-    WriteByte(dev, 0x80, 0x01);
-    WriteByte(dev, 0xFF, 0x01);
-    WriteByte(dev, 0x00, 0x00);
-    WriteByte(dev, 0x91, 0x3C); // Legacy stop variable
-    WriteByte(dev, 0x00, 0x01);
-    WriteByte(dev, 0xFF, 0x00);
-    WriteByte(dev, 0x80, 0x00);
-
-    WriteByte(dev, VL53L0X_REG_SYSRANGE_START, 0x01);
-
-    // Wait for completion
-    uint32_t start = HAL_GetTick();
-    while (1) {
+    // In Continuous mode, we just polling for interrupt flag
+    
+    int timeout = 0;
+    while (timeout < 1000) { // Safety timeout
     	uint8_t val = ReadByte(dev, VL53L0X_REG_RESULT_INTERRUPT_STATUS);
-        if (val & 0x07) break; // Data ready
-        
-        if (HAL_GetTick() - start > 1000) {
-        	return 0xFFFF; // Timeout 1s
-        }
+        if (val & 0x07) break; 
+        // HAL_Delay(1); // Wait for next sample (~33ms in default mode)
+        // With loop overhead, checking continuously is fine or small delay
+        timeout++;
+        if (timeout % 100 == 0) HAL_Delay(1);
     }
+    
+    if (timeout >= 1000) return 0xFFFF;
 
     // Read distance
-    // 0x1E corresponds to RESULT_RANGE_STATUS + 10
     uint8_t high = ReadByte(dev, 0x1E);
     uint8_t low = ReadByte(dev, 0x1F);
     uint16_t dist = (high << 8) | low;
+    
+    // Clear Interrupt
+    WriteByte(dev, 0x0B, 0x01);
 
     if (dist != 0xFFFF && dist != 8190 && dist != 8191) {
         dist = (uint16_t)((int16_t)dist + dev->offset_mm);
     }
-
-    // Clear Interrupt
-    WriteByte(dev, 0x0B, 0x01); 
 
     return dist;
 }

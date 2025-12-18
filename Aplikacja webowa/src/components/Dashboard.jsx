@@ -2,6 +2,7 @@ import { Activity, AlertCircle, PlugZap, Usb } from "lucide-react";
 import React from "react";
 import "../App.css"; // Ensure styles are loaded
 import { useSerial } from "../hooks/useSerial";
+import { BeamVisualizer } from "./BeamVisualizer";
 import { Charts } from "./Charts";
 import { ControlPanel } from "./ControlPanel";
 import { Metrics } from "./Metrics";
@@ -49,7 +50,7 @@ export const Dashboard = () => {
                         <Metrics data={latestData} />
 
                         {/* Control Panel */}
-                        <ControlPanel sendSetpoint={sendSetpoint} sendPid={sendPid} />
+                        <ControlPanel sendSetpoint={sendSetpoint} sendPid={sendPid} distance={latestData.distance} externalSetpoint={latestData.setpoint} />
 
                         {/* Terminal */}
                         <div style={{ flex: 1, minHeight: "200px" }}>

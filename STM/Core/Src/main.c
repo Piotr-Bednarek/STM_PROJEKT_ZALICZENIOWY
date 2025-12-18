@@ -39,7 +39,23 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+// --- Parametry Systemu ---
+#define SETPOINT_DEFAULT   200.0f
+#define BALL_RADIUS        20
+#define PID_DT_MS          30
 
+// --- Limity Serwa ---
+#define SERVO_CENTER       100.0f
+#define SERVO_MIN_LIMIT    65.0f
+#define SERVO_MAX_LIMIT    135.0f
+
+// --- Konfiguracja Sprzętowa Serwa ---
+#define SERVO_MIN_CCR      500
+#define SERVO_MAX_CCR      2500
+#define SERVO_MAX_ANGLE    200
+
+// --- Tryb Testowy ---
+#define SENSOR_TEST_MODE   0  // 1 aby włączyć logowanie surowych danych czujnika
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -91,7 +107,7 @@ volatile uint8_t rx_idx = 0;
 volatile uint8_t cmd_received = 0;
 
 // Zmienne Globalne Sterowania
-volatile float g_setpoint = 200.0f;
+volatile float g_setpoint = SETPOINT_DEFAULT;
 volatile float g_Kp = -0.5f;
 volatile float g_Ki = -0.0004f;
 volatile float g_Kd = -250.0f;
@@ -117,6 +133,12 @@ typedef struct {
 	uint8_t first_run;
 } AdaptiveEMA_t;
 
+void AdaptiveEMA_Init(AdaptiveEMA_t *ema, float min_alpha, float max_alpha, float threshold);
+float AdaptiveEMA_Filter(AdaptiveEMA_t *ema, float measurement);
+void I2C_ClearBus(void);
+void I2C_CheckLines(void);
+/* USER CODE END PFP */
+
 void AdaptiveEMA_Init(AdaptiveEMA_t *ema, float min_alpha, float max_alpha, float threshold) {
 	ema->min_alpha = min_alpha;
 	ema->max_alpha = max_alpha;
@@ -131,39 +153,83 @@ float AdaptiveEMA_Filter(AdaptiveEMA_t *ema, float measurement) {
 		ema->first_run = 0;
 		return measurement;
 	}
-
-	float error = (measurement > ema->value) ? (measurement - ema->value) : (ema->value - measurement); // abs(float)
-
-	// Factor = min(error / threshold, 1.0)
+	float error = (measurement > ema->value) ? (measurement - ema->value) : (ema->value - measurement);
 	float factor = error / ema->threshold;
-	if (factor > 1.0f)
-		factor = 1.0f;
-
+	if (factor > 1.0f) factor = 1.0f;
 	float alpha = ema->min_alpha + (ema->max_alpha - ema->min_alpha) * factor;
-
 	ema->value = alpha * measurement + (1.0f - alpha) * ema->value;
 	return ema->value;
 }
-
-/* USER CODE END PFP */
-
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
 
 uint8_t CalculateCRC8(const char *data, int len) {
 	uint8_t crc = 0x00;
 	for (int i = 0; i < len; i++) {
 		crc ^= data[i];
 		for (uint8_t j = 0; j < 8; j++) {
-			if (crc & 0x80)
-				crc = (crc << 1) ^ 0x07;
-			else
-				crc <<= 1;
+			if (crc & 0x80) crc = (crc << 1) ^ 0x07;
+			else crc <<= 1;
 		}
 	}
 	return crc;
 }
 
+/**
+ * @brief Procedura odblokowania magistrali I2C.
+ * Jeśli urządzenie (Slave) zawiesi linię SDA w stanie niskim, Master nie może wysłać sygnału START.
+ * Rozwiązaniem jest ręczne wygenerowanie do 9 impulsów zegarowych na SCL.
+ */
+void I2C_ClearBus(void) {
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+	// 1. Włącz zegar GPIO
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+
+	// 2. Skonfiguruj PB6 (SCL) i PB9 (SDA) jako wyjścia Open-Drain
+	GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_9;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+	GPIO_InitStruct.Pull = GPIO_PULLUP;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+	// 3. Sprawdź czy SDA jest niskie. Jeśli tak, generuj impulsy na SCL.
+	// (SLAVE myśli że przesyła dane i czeka na zegar)
+	for (int i = 0; i < 20; i++) { // Więcej impulsów
+		if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_SET) break;
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+		HAL_Delay(10);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+		HAL_Delay(10);
+	}
+
+	// 4. Spróbuj wygenerować sygnał STOP ręcznie
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+	HAL_Delay(10);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+	HAL_Delay(10);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+	HAL_Delay(10);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
+	HAL_Delay(20);
+
+	// 5. Powrót do stanu wysokiej impedancji (I2C przejmie piny po MX_Init)
+}
+
+void I2C_CheckLines(void) {
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
+	// Konfiguracja jako wejście z Pull-up
+	GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_9;
+	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	GPIO_InitStruct.Pull = GPIO_PULLUP;
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+	HAL_Delay(10);
+	int scl_state = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6);
+	int sda_state = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9);
+
+	char dbg[64];
+	sprintf(dbg, "GPIO STATE -> SCL(PB6):%d, SDA(PB9):%d\r\n", scl_state, sda_state);
+	HAL_UART_Transmit(&huart3, (uint8_t*)dbg, strlen(dbg), 100);
+}
 /* USER CODE END 0 */
 
 /**
@@ -183,7 +249,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  HAL_Delay(500); // Czekaj na ustabilizowanie zasilania czujników
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -199,22 +265,21 @@ int main(void)
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_TIM3_Init();
+  // Diagnostyka linii przed inicjalizacją I2C
+  // I2C_CheckLines(); // Zakomentowane po potwierdzeniu działania
+  I2C_ClearBus();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
-	// Dla serw 180/200 stopni (jak MG946R) zakres impulsu to zazwyczaj 500us - 2500us
-	// 500us = 0 stopni, 2500us = max (ok. 180-200 stopni)
-	const uint32_t MIN_CCR = 500;
-	const uint32_t MAX_CCR = 2500;
-	const uint16_t MAX_ANGLE = 200;
-
-	Servo_Init(&servo, &htim3, TIM_CHANNEL_1, MIN_CCR, MAX_CCR, MAX_ANGLE);
+	// Konfiguracja serwa przy użyciu zdefiniowanych parametrów
+	Servo_Init(&servo, &htim3, TIM_CHANNEL_1, SERVO_MIN_CCR, SERVO_MAX_CCR, SERVO_MAX_ANGLE);
 
 	// I2C Scanner
 	HAL_UART_Transmit(&huart3, (uint8_t*) "Scanning I2C bus...\r\n", 21, 100);
 	int devices_found = 0;
 	for (uint16_t i = 1; i < 128; i++) {
-		if (HAL_I2C_IsDeviceReady(&hi2c1, (i << 1), 1, 10) == HAL_OK) {
+		HAL_StatusTypeDef res = HAL_I2C_IsDeviceReady(&hi2c1, (i << 1), 3, 10);
+		if (res == HAL_OK) {
 			char scanMsg[32];
 			sprintf(scanMsg, "Found device at 0x%02X\r\n", (i << 1));
 			HAL_UART_Transmit(&huart3, (uint8_t*) scanMsg, strlen(scanMsg), 100);
@@ -241,13 +306,24 @@ int main(void)
 	}
 	HAL_UART_Transmit(&huart3, (uint8_t*) debugMsg, strlen(debugMsg), 100);
 
-	// Init VL53L0X
-	if (VL53L0X_Init(&tof, &hi2c1)) {
-		HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init OK\r\n", 17, 100);
-		// USUWAMY STARY OFFSET (-40)
-		// VL53L0X_SetOffset(&tof, -40);
-	} else {
-		HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init FAILED\r\n", 21, 100);
+	// Init VL53L0X z retry
+	int init_attempts = 0;
+	int init_success = 0;
+	
+	while (init_attempts < 3 && !init_success) {
+		if (VL53L0X_Init(&tof, &hi2c1)) {
+			HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init OK\r\n", 17, 100);
+			init_success = 1;
+		} else {
+			init_attempts++;
+			char retry_msg[32];
+			sprintf(retry_msg, "VL53L0X Init FAILED (Attempt %d)\r\n", init_attempts);
+			HAL_UART_Transmit(&huart3, (uint8_t*)retry_msg, strlen(retry_msg), 100);
+			HAL_Delay(100);
+			// Próba odblokowania ponowna
+			I2C_ClearBus(); 
+			MX_I2C1_Init();
+		}
 	}
 
   /* USER CODE END 2 */
@@ -273,8 +349,8 @@ int main(void)
 	uint32_t last_pid_time = 0;
 
 	Servo_Start(&servo);
-	// Ustawienie początkowe na środek (zakładamy 100 jako środek geometryczny belki)
-	float current_servo_angle = 100.0f;
+	// Ustawienie początkowe na środek (zgodnie z definicją SERVO_CENTER)
+	float current_servo_angle = SERVO_CENTER;
 	Servo_SetAngle(&servo, (uint16_t) current_servo_angle);
 
 
@@ -358,9 +434,29 @@ int main(void)
 		distance = VL53L0X_ReadDistance(&tof);
 
 		if (distance != 0xFFFF && distance < 8190) {
-			// Korekta na promień kulki (średnica 40mm -> promień 20mm)
-			// Czujnik widzi powierzchnię, my chcemy środek.
-			distance += 20;
+			// Korekta na promień kulki
+			distance += BALL_RADIUS;
+
+			// --- KALIBRACJA LINIOWA (MAPPING) ---
+			// Odczyt MIN (palec): ~80mm -> Cel: 0mm
+			// Odczyt MAX (koniec): ~317mm -> Cel: 300mm
+			// Wzór: Y = (X - 80) * 1.26
+			
+			float dist_calibrated = ((float)distance - 80.0f) * 1.26f;
+			
+			if (dist_calibrated < 0.0f) dist_calibrated = 0.0f;
+			if (dist_calibrated > 300.0f) dist_calibrated = 300.0f;
+			
+			distance = (uint16_t)dist_calibrated;
+
+#if SENSOR_TEST_MODE
+			// Logowanie w standardowym formacie (aby aplikacja/wykres go rozpoznały)
+			char test_buf[64];
+			int t_len = sprintf(test_buf, "D:%d;A:%d;F:%d;E:0", distance, (int)current_servo_angle, distance);
+			uint8_t t_crc = CalculateCRC8(test_buf, t_len);
+			sprintf(msg, "%s;C:%02X\r\n", test_buf, t_crc);
+			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 10);
+#endif
 
 			// Średnia krocząca
 			dist_history[dist_idx] = (float) distance;
@@ -372,21 +468,21 @@ int main(void)
 				dist_sum += dist_history[i];
 			float avg_dist = dist_sum / (float) MOVING_AVG_SIZE;
 
-			// 2. OBLICZANIE PID (Tylko co 30ms)
-			if (HAL_GetTick() - last_pid_time >= 30) {
+			// 2. OBLICZANIE PID (Tylko co PID_DT_MS)
+			if (HAL_GetTick() - last_pid_time >= PID_DT_MS) {
 				last_pid_time = HAL_GetTick();
 
 				// Używamy uśrednionej wartości avg_dist
 				float pid_out = PID_Compute(&pid, g_setpoint, avg_dist);
 
-				float target_servo_angle = 100.0f + pid_out;
+				float target_servo_angle = SERVO_CENTER + pid_out;
 				float alpha = 0.4f; // Zachowujemy wygładzanie wyjścia serwa
 				current_servo_angle = current_servo_angle * (1.0f - alpha) + target_servo_angle * alpha;
 
-				if (current_servo_angle > 135.0f)
-					current_servo_angle = 135.0f;
-				if (current_servo_angle < 65.0f)
-					current_servo_angle = 65.0f;
+				if (current_servo_angle > SERVO_MAX_LIMIT)
+					current_servo_angle = SERVO_MAX_LIMIT;
+				if (current_servo_angle < SERVO_MIN_LIMIT)
+					current_servo_angle = SERVO_MIN_LIMIT;
 
 				Servo_SetAngle(&servo, (uint16_t) current_servo_angle);
 
@@ -400,10 +496,24 @@ int main(void)
 				sprintf(msg, "%s;C:%02X\r\n", data_buffer, out_crc);
 				HAL_UART_Transmit(&huart3, (uint8_t*) msg, strlen(msg), 100);
 			}
-
-		} else {
-			// Opcjonalnie log bledow rzadziej
 		}
+
+#if SENSOR_TEST_MODE
+		// Debug logging - always print distance status
+		if (distance == 0xFFFF) {
+			HAL_UART_Transmit(&huart3, (uint8_t*)".", 1, 10); // Busy/Timeout indicator
+		} else {
+			char dbg_s[64];
+			uint8_t status = VL53L0X_GetRangeStatus(&tof);
+			sprintf(dbg_s, "DIST: %d, STATUS: %d\r\n", distance, status);
+			HAL_UART_Transmit(&huart3, (uint8_t*)dbg_s, strlen(dbg_s), 10);
+		}
+#endif
+		
+		// Heartbeat - Miganie LD2 co obieg pętli (dla diagnostyki zawieszeń)
+		HAL_GPIO_TogglePin(GPIOB, LD2_Pin);
+		HAL_Delay(10); // Małe opóźnienie dla stabilności pętli
+		
 		// Brak HAL_Delay - max speed loop
   }
   /* USER CODE END 3 */
@@ -531,7 +641,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x20303E5D;
+  hi2c1.Init.Timing = 0x20303E5D; // Timing zgodny z Twoim konfiguratorem
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
