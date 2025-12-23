@@ -1,5 +1,7 @@
 #include "vl53l0x.h"
 
+extern UART_HandleTypeDef huart3;
+
 // Basic Registers
 #define VL53L0X_REG_IDENTIFICATION_MODEL_ID         0xC0
 #define VL53L0X_REG_SYSRANGE_START                  0x00
@@ -8,17 +10,17 @@
 
 // Helpers
 static void WriteByte(VL53L0X_Dev_t *dev, uint8_t reg, uint8_t val) {
-    HAL_I2C_Mem_Write(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, &val, 1, 1000);
+    HAL_I2C_Mem_Write(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, &val, 1, 50); 
 }
 
 static uint8_t ReadByte(VL53L0X_Dev_t *dev, uint8_t reg) {
     uint8_t val = 0;
-    HAL_I2C_Mem_Read(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, &val, 1, 1000);
+    HAL_I2C_Mem_Read(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, &val, 1, 50); 
     return val;
 }
 
 static void WriteMulti(VL53L0X_Dev_t *dev, uint8_t reg, uint8_t *data, uint16_t size) {
-	HAL_I2C_Mem_Write(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, data, size, 1000);
+	HAL_I2C_Mem_Write(dev->hi2c, dev->address, reg, I2C_MEMADD_SIZE_8BIT, data, size, 50);
 }
 
 // Default tuning settings
@@ -41,28 +43,26 @@ static void VL53L0X_LoadTuning(VL53L0X_Dev_t *dev) {
 	}
 }
 
-// Perform Reference Calibration (VHV + Phase)
 static uint8_t VL53L0X_PerformRefCalibration(VL53L0X_Dev_t *dev) {
-    WriteByte(dev, 0x00, 0x01); // SYSRANGE_START to 0x01 
-    
-    // Set Sequence Config to 0x01 (VHV + Phase Cal only)
+    // VHV cal
     WriteByte(dev, 0x01, 0x01);
-    
-    // Start
     WriteByte(dev, 0x00, 0x01);
-    
-    // Wait for Interrupt
     uint32_t start = HAL_GetTick();
     while ((ReadByte(dev, 0x13) & 0x07) == 0) {
-        if (HAL_GetTick() - start > 500) return 0; // Timeout 500ms
+        if (HAL_GetTick() - start > 200) break;
     }
-    
-    // Clear Interrupt
     WriteByte(dev, 0x0B, 0x01);
-    
-    // Restore Sequence Config 
+
+    // Phase cal
+    WriteByte(dev, 0x01, 0x02);
+    WriteByte(dev, 0x00, 0x01);
+    start = HAL_GetTick();
+    while ((ReadByte(dev, 0x13) & 0x07) == 0) {
+        if (HAL_GetTick() - start > 200) break;
+    }
+    WriteByte(dev, 0x0B, 0x01);
+
     WriteByte(dev, 0x01, 0xE8);
-    
     return 1;
 }
 
@@ -134,17 +134,11 @@ static void VL53L0X_SetReferenceSpads(VL53L0X_Dev_t *dev, uint8_t count, uint8_t
     
     WriteByte(dev, 0xFF, 0x01);
     WriteByte(dev, 0x00, 0x00);
-    WriteByte(dev, 0xFF, 0x00); 
+    WriteMulti(dev, 0xB0, spad_map, 6); // Try B0 with Bank 1
     
-    WriteMulti(dev, 0x80, spad_map, 6); // Write all 6 bytes
-    
-    // Restore
-    WriteByte(dev, 0xFF, 0x01);
-    WriteByte(dev, 0x00, 0x00);
     WriteByte(dev, 0xFF, 0x00);
-    
-    // Original restore
     WriteByte(dev, 0x80, 0x00);
+    HAL_Delay(2);
 }
 
 
@@ -153,16 +147,16 @@ uint8_t VL53L0X_Init(VL53L0X_Dev_t *dev, I2C_HandleTypeDef *hi2c) {
     dev->address = VL53L0X_ADDR; // 0x52
     dev->offset_mm = 0;
 
-    // Soft Reset
-    WriteByte(dev, 0x80, 0x00); 
-    HAL_Delay(5);
-    WriteByte(dev, 0x80, 0x01);
-    HAL_Delay(5);
-    
-    // Check ID
+    // Wake up / Check ID
+    HAL_Delay(100); // Wait longer for sensor power up
     uint8_t model_id = ReadByte(dev, VL53L0X_REG_IDENTIFICATION_MODEL_ID);
     if (model_id != 0xEE) {
-        return 0; // Device not found or ID mismatch
+        HAL_Delay(50);
+        model_id = ReadByte(dev, VL53L0X_REG_IDENTIFICATION_MODEL_ID);
+        if (model_id != 0xEE) {
+        	HAL_UART_Transmit(&huart3, (uint8_t*)"LOG:VL53_ERR:ID_NOT_FOUND\r\n", 27, 100);
+        	return 0;
+        }
     }
 
     // Data Init
@@ -170,18 +164,20 @@ uint8_t VL53L0X_Init(VL53L0X_Dev_t *dev, I2C_HandleTypeDef *hi2c) {
     WriteByte(dev, 0x80, 0x01);
     WriteByte(dev, 0xFF, 0x01);
     WriteByte(dev, 0x00, 0x00);
+    HAL_Delay(2);
     
-    ReadByte(dev, 0x91); 
+    dev->stop_variable = ReadByte(dev, 0x91); // Save stop variable
     
     WriteByte(dev, 0x00, 0x01);
     WriteByte(dev, 0xFF, 0x00);
     WriteByte(dev, 0x80, 0x00);
+    HAL_Delay(2);
     
     // SPAD Management
     uint8_t spad_count;
     uint8_t spad_type_is_aperture;
     if (!VL53L0X_PerformRefSpadManagement(dev, &spad_count, &spad_type_is_aperture)) {
-    	// Fallback to reasonable defaults?
+    	HAL_UART_Transmit(&huart3, (uint8_t*)"LOG:VL53_WARN:SPAD_AUTO\r\n", 25, 100);
     	spad_count = 5; 
         spad_type_is_aperture = 0;
     }
@@ -193,7 +189,10 @@ uint8_t VL53L0X_Init(VL53L0X_Dev_t *dev, I2C_HandleTypeDef *hi2c) {
     VL53L0X_SetReferenceSpads(dev, spad_count, spad_type_is_aperture);
 
     // Perform Reference Calibration (VHV + Phase)
-    VL53L0X_PerformRefCalibration(dev);
+    if (!VL53L0X_PerformRefCalibration(dev)) {
+        HAL_UART_Transmit(&huart3, (uint8_t*)"LOG:VL53_WARN:CALIB_FAIL\r\n", 26, 100);
+        // We continue anyway, sensor might still work
+    }
 
     // Set Signal Rate Limit to 0.25 MCPS
     WriteByte(dev, 0x44, 0x00);
@@ -210,7 +209,8 @@ uint8_t VL53L0X_Init(VL53L0X_Dev_t *dev, I2C_HandleTypeDef *hi2c) {
     WriteByte(dev, 0x80, 0x01);
     WriteByte(dev, 0xFF, 0x01);
     WriteByte(dev, 0x00, 0x00);
-    WriteByte(dev, 0x91, 0x3C);
+    if (dev->stop_variable == 0) dev->stop_variable = 0x3C; // Safety default
+    WriteByte(dev, 0x91, dev->stop_variable); 
     WriteByte(dev, 0x00, 0x01);
     WriteByte(dev, 0xFF, 0x00);
     WriteByte(dev, 0x80, 0x00);
@@ -228,16 +228,15 @@ uint16_t VL53L0X_ReadDistance(VL53L0X_Dev_t *dev) {
     // In Continuous mode, we just polling for interrupt flag
     
     int timeout = 0;
-    while (timeout < 1000) { // Safety timeout
-    	uint8_t val = ReadByte(dev, VL53L0X_REG_RESULT_INTERRUPT_STATUS);
+    while (timeout < 100) { 
+        uint8_t val = ReadByte(dev, VL53L0X_REG_RESULT_INTERRUPT_STATUS);
         if (val & 0x07) break; 
-        // HAL_Delay(1); // Wait for next sample (~33ms in default mode)
-        // With loop overhead, checking continuously is fine or small delay
+        
         timeout++;
-        if (timeout % 100 == 0) HAL_Delay(1);
+        HAL_Delay(1); // Crucial: give sensor time to measure!
     }
     
-    if (timeout >= 1000) return 0xFFFF;
+    if (timeout >= 100) return 0xFFFF;
 
     // Read distance
     uint8_t high = ReadByte(dev, 0x1E);

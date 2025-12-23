@@ -21,6 +21,7 @@ typedef struct {
     uint8_t io_timeout;
     uint8_t did_timeout;
     int16_t offset_mm;
+    uint8_t stop_variable; // Added for correct continuous mode management
 } VL53L0X_Dev_t;
 
 // Function Prototypes
