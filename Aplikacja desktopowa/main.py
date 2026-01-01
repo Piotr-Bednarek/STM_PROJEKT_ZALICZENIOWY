@@ -65,7 +65,7 @@ class UARTApp:
 
         # Baudrate
         ttk.Label(config_frame, text="Baud:").grid(row=1, column=0, sticky="w")
-        self.baudrate = tk.StringVar(value="9600")
+        self.baudrate = tk.StringVar(value="115200")
         self.baudrate_combo = ttk.Combobox(config_frame, textvariable=self.baudrate, 
                                         values=["9600", "115200", "19200", "38400", "57600"], width=10)
         self.baudrate_combo.grid(row=1, column=1, sticky="w", padx=5)
@@ -227,6 +227,11 @@ class UARTApp:
         self.max_history = 200 
         self.sample_counter = 0
         
+        # Licznik częstotliwości próbkowania
+        self.sample_rate_counter = 0
+        self.sample_rate_start_time = time.time()
+        self.current_sample_rate = 0.0
+        
         # Clamp (Ograniczenie fizyczne belki)
         self.clamp_min = 0
         self.clamp_max = 280 # mm (Długość belki)
@@ -386,6 +391,17 @@ class UARTApp:
             time.sleep(0.01)
 
     def process_line(self, line):
+        # Obliczanie częstotliwości próbkowania
+        self.sample_rate_counter += 1
+        current_time = time.time()
+        elapsed = current_time - self.sample_rate_start_time
+        
+        if elapsed >= 1.0:  # Co sekundę
+            self.current_sample_rate = self.sample_rate_counter / elapsed
+            self.log_message(f"[SAMPLE RATE] {self.current_sample_rate:.2f} Hz\n")
+            self.sample_rate_counter = 0
+            self.sample_rate_start_time = current_time
+        
         self.log_message(f"{line}\n")
         self.update_chart(line)
 

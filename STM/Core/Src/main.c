@@ -19,15 +19,11 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "string.h"
-#include <stdlib.h>
-#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include "servo.h"
-#include "vl53l0x.h"
-#include "pid.h"
+#include "VL53L0X.h"
 #include <stdio.h>
 
 /* USER CODE END Includes */
@@ -94,9 +90,6 @@ UART_HandleTypeDef huart3;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
-
-Servo_Handle_t servo;
-VL53L0X_Dev_t tof;
 uint16_t distance;
 char msg[64];
 
@@ -108,10 +101,9 @@ volatile uint8_t cmd_received = 0;
 
 // Zmienne Globalne Sterowania
 volatile float g_setpoint = SETPOINT_DEFAULT;
-volatile float g_Kp = -0.5f;
-volatile float g_Ki = -0.0004f;
-volatile float g_Kd = -250.0f;
-
+volatile float g_Kp = -0.11f;
+volatile float g_Ki = -0.004f;
+volatile float g_Kd = -2.0f;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -123,7 +115,6 @@ static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
-
 // --- Adaptive EMA Struct ---
 typedef struct {
 	float min_alpha;
@@ -135,10 +126,10 @@ typedef struct {
 
 void AdaptiveEMA_Init(AdaptiveEMA_t *ema, float min_alpha, float max_alpha, float threshold);
 float AdaptiveEMA_Filter(AdaptiveEMA_t *ema, float measurement);
-void I2C_ClearBus(void);
-void I2C_CheckLines(void);
 /* USER CODE END PFP */
 
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
 void AdaptiveEMA_Init(AdaptiveEMA_t *ema, float min_alpha, float max_alpha, float threshold) {
 	ema->min_alpha = min_alpha;
 	ema->max_alpha = max_alpha;
@@ -155,7 +146,8 @@ float AdaptiveEMA_Filter(AdaptiveEMA_t *ema, float measurement) {
 	}
 	float error = (measurement > ema->value) ? (measurement - ema->value) : (ema->value - measurement);
 	float factor = error / ema->threshold;
-	if (factor > 1.0f) factor = 1.0f;
+	if (factor > 1.0f)
+		factor = 1.0f;
 	float alpha = ema->min_alpha + (ema->max_alpha - ema->min_alpha) * factor;
 	ema->value = alpha * measurement + (1.0f - alpha) * ema->value;
 	return ema->value;
@@ -171,64 +163,6 @@ uint8_t CalculateCRC8(const char *data, int len) {
 		}
 	}
 	return crc;
-}
-
-/**
- * @brief Procedura odblokowania magistrali I2C.
- * Jeśli urządzenie (Slave) zawiesi linię SDA w stanie niskim, Master nie może wysłać sygnału START.
- * Rozwiązaniem jest ręczne wygenerowanie do 9 impulsów zegarowych na SCL.
- */
-void I2C_ClearBus(void) {
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-	// 1. Włącz zegar GPIO
-	__HAL_RCC_GPIOB_CLK_ENABLE();
-
-	// 2. Skonfiguruj PB6 (SCL) i PB9 (SDA) jako wyjścia Open-Drain
-	GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_9;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-	// 3. Sprawdź czy SDA jest niskie. Jeśli tak, generuj impulsy na SCL.
-	// (SLAVE myśli że przesyła dane i czeka na zegar)
-	for (int i = 0; i < 20; i++) { // Więcej impulsów
-		if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_SET) break;
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
-		HAL_Delay(10);
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
-		HAL_Delay(10);
-	}
-
-	// 4. Spróbuj wygenerować sygnał STOP ręcznie
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
-	HAL_Delay(10);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
-	HAL_Delay(10);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
-	HAL_Delay(10);
-	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
-	HAL_Delay(20);
-
-	// 5. Powrót do stanu wysokiej impedancji (I2C przejmie piny po MX_Init)
-}
-
-void I2C_CheckLines(void) {
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
-	// Konfiguracja jako wejście z Pull-up
-	GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_9;
-	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-	HAL_Delay(10);
-	int scl_state = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6);
-	int sda_state = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9);
-
-	char dbg[64];
-	sprintf(dbg, "GPIO STATE -> SCL(PB6):%d, SDA(PB9):%d\r\n", scl_state, sda_state);
-	HAL_UART_Transmit(&huart3, (uint8_t*)dbg, strlen(dbg), 100);
 }
 /* USER CODE END 0 */
 
@@ -249,7 +183,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  HAL_Delay(500); // Czekaj na ustabilizowanie zasilania czujników
+	HAL_Delay(500); // Czekaj na ustabilizowanie zasilania czujników
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -265,257 +199,85 @@ int main(void)
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_TIM3_Init();
-  // Diagnostyka linii przed inicjalizacją I2C
-  // I2C_CheckLines(); // Zakomentowane po potwierdzeniu działania
-  I2C_ClearBus();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
-	// Konfiguracja serwa przy użyciu zdefiniowanych parametrów
-	Servo_Init(&servo, &htim3, TIM_CHANNEL_1, SERVO_MIN_CCR, SERVO_MAX_CCR, SERVO_MAX_ANGLE);
-
-	// I2C Scanner
-	HAL_UART_Transmit(&huart3, (uint8_t*) "Scanning I2C bus...\r\n", 21, 100);
-	int devices_found = 0;
-	for (uint16_t i = 1; i < 128; i++) {
-		HAL_StatusTypeDef res = HAL_I2C_IsDeviceReady(&hi2c1, (i << 1), 3, 10);
-		if (res == HAL_OK) {
-			char scanMsg[32];
-			sprintf(scanMsg, "Found device at 0x%02X\r\n", (i << 1));
-			HAL_UART_Transmit(&huart3, (uint8_t*) scanMsg, strlen(scanMsg), 100);
-			devices_found++;
-		}
-	}
-	if (devices_found == 0) {
-		HAL_UART_Transmit(&huart3, (uint8_t*) "No I2C devices found!\r\n", 23, 100);
-	}
-	HAL_UART_Transmit(&huart3, (uint8_t*) "Scan complete.\r\n", 16, 100);
-
-//	Servo_Start(&servo);
-//	Servo_SetAngle(&servo, 100); // Start od 0
-
-	// Manual DEBUG: Read Model ID explicitly
-	uint8_t id_val = 0;
-	HAL_StatusTypeDef status = HAL_I2C_Mem_Read(&hi2c1, 0x52, 0xC0, I2C_MEMADD_SIZE_8BIT, &id_val, 1, 100);
-
-	char debugMsg[64];
-	if (status == HAL_OK) {
-		sprintf(debugMsg, "Read Model ID: 0x%02X (Expected 0xEE)\r\n", id_val);
-	} else {
-		sprintf(debugMsg, "I2C Read Error: %d\r\n", status);
-	}
-	HAL_UART_Transmit(&huart3, (uint8_t*) debugMsg, strlen(debugMsg), 100);
-
-	// Init VL53L0X z retry
-	int init_attempts = 0;
-	int init_success = 0;
+	// Inicjalizacja VL53L0X
+	statInfo_t_VL53L0X distanceStr;
 	
-	while (init_attempts < 3 && !init_success) {
-		if (VL53L0X_Init(&tof, &hi2c1)) {
-			HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init OK\r\n", 17, 100);
-			init_success = 1;
-		} else {
-			init_attempts++;
-			char retry_msg[32];
-			sprintf(retry_msg, "VL53L0X Init FAILED (Attempt %d)\r\n", init_attempts);
-			HAL_UART_Transmit(&huart3, (uint8_t*)retry_msg, strlen(retry_msg), 100);
-			HAL_Delay(100);
-			// Próba odblokowania ponowna
-			I2C_ClearBus(); 
-			MX_I2C1_Init();
-		}
+	HAL_UART_Transmit(&huart3, (uint8_t*)"Initializing VL53L0X...\r\n", 25, 100);
+	if (!initVL53L0X(1, &hi2c1)) {
+		HAL_UART_Transmit(&huart3, (uint8_t*)"VL53L0X Init Failed!\r\n", 22, 100);
+	} else {
+		HAL_UART_Transmit(&huart3, (uint8_t*)"VL53L0X Init Success!\r\n", 23, 100);
 	}
+	
+	// Ustaw timeout dla odczytów - musi być większy niż timing budget
+	setTimeout(35); // 35ms timeout dla readRange
+	
+	// Configure the sensor for FAST continuous measurements
+	setSignalRateLimit(200);
+	setVcselPulsePeriod(VcselPeriodPreRange, 14);
+	setVcselPulsePeriod(VcselPeriodFinalRange, 10);
+	setMeasurementTimingBudget(25000); // 25ms = ~40 Hz (szybsze próbkowanie)
+	
+	// Start continuous mode
+	startContinuous(0);
+	
+	HAL_UART_Transmit(&huart3, (uint8_t*)"VL53L0X Ready! Sending data...\r\n", 32, 100);
 
   /* USER CODE END 2 */
-  
-  // === INICJALIZACJA PID ===
-	PID_Controller_t pid;
-
-	// Sugerowane wartości startowe
-	g_Kp = -0.11f;
-	g_Ki = -0.004f;
-	g_Kd = -2.0f;
-
-	// Inicjalizacja PID
-	PID_Init(&pid, g_Kp, g_Ki, g_Kd, -35.0f, 35.0f);
-
-	// Zmienne do średniej kroczącej
-#define MOVING_AVG_SIZE 5
-	float dist_history[MOVING_AVG_SIZE] = { 0 };
-	int dist_idx = 0;
-	float dist_sum = 0;
-
-	// Zmienna czasu
-	uint32_t last_pid_time = 0;
-
-	Servo_Start(&servo);
-	// Ustawienie początkowe na środek (zgodnie z definicją SERVO_CENTER)
-	float current_servo_angle = SERVO_CENTER;
-	Servo_SetAngle(&servo, (uint16_t) current_servo_angle);
-
-
-   HAL_UART_Transmit(&huart3, (uint8_t*) "Entering main loop...\r\n", 23, 100);
-   HAL_UART_Receive_IT(&huart3, &rx_byte, 1); // Start Rx
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-    		// --- PARSOWANIE KOMEND ---
-		if (cmd_received) {
-			cmd_received = 0;
-            
-            // DEBUG ECHO: Sprawdzamy co STM32 widzi w buforze
-            char debug_buf[80];
-            sprintf(debug_buf, "LOG:RX_RAW=[%s]\r\n", rx_buffer);
-            HAL_UART_Transmit(&huart3, (uint8_t*)debug_buf, strlen(debug_buf), 100);
-
-			// Format: CMD...;C:CRC
-			char *crc_ptr = strstr((char*) rx_buffer, ";C:");
-			if (crc_ptr) {
-				*crc_ptr = 0; // Null term data part
-				char *crc_hex = crc_ptr + 3;
-				uint8_t rec_crc = (uint8_t) strtol(crc_hex, NULL, 16);
-				uint8_t calc_crc = CalculateCRC8((char*) rx_buffer, strlen((char*) rx_buffer));
-
-				if (rec_crc == calc_crc) {
-					// Parsowanie
-					if (strncmp((char*) rx_buffer, "SET:", 4) == 0) {
-						float val = (float)atof((char*) rx_buffer + 4);
-						if (val >= 0 && val <= 300) {
-							g_setpoint = val;
-							// Potwierdzenie ACK
-							char ack_msg[64];
-							sprintf(ack_msg, "LOG:ACK SET:%d\r\n", (int)g_setpoint);
-							HAL_UART_Transmit(&huart3, (uint8_t*) ack_msg, strlen(ack_msg), 100);
-						}
-					} else if (strncmp((char*) rx_buffer, "PID:", 4) == 0) {
-						// PID:Kp;Ki;Kd
-						// Parsowanie ręczne (strtok-style) dla pewności
-						char* p_ptr = (char*)rx_buffer + 4;
-						char* i_ptr = strchr(p_ptr, ';');
-						
-						if (i_ptr) {
-							*i_ptr = '\0'; // Zakończ string P
-							i_ptr++;      // Przesuń na I
-							
-							char* d_ptr = strchr(i_ptr, ';');
-							if (d_ptr) {
-								*d_ptr = '\0'; // Zakończ string I
-								d_ptr++;      // Przesuń na D
-								
-								// Używamy atof (stdlib.h required)
-								g_Kp = (float)atof(p_ptr); 
-								g_Ki = (float)atof(i_ptr);
-								g_Kd = (float)atof(d_ptr);
-
-								// Re-init PID
-								PID_Reset(&pid);
-								PID_Init(&pid, g_Kp, g_Ki, g_Kd, -35.0f, 35.0f);
-
-								// LOG ACK - formatowanie x1000/x100000 dla czytelności
-								char ack_msg[64];
-								sprintf(ack_msg, "LOG:ACK P:%d I:%d D:%d\r\n", 
-										(int)(g_Kp*1000), (int)(g_Ki*100000), (int)(g_Kd*10));
-								HAL_UART_Transmit(&huart3, (uint8_t*) ack_msg, strlen(ack_msg), 100);
-							}
-						}
-					}
-				} else {
-					HAL_UART_Transmit(&huart3, (uint8_t*)"LOG:CRC FAIL\r\n", 14, 100);
-				}
-			}
+	uint32_t loop_counter = 0;
+	
+	// Inicjalizacja filtra Adaptive EMA
+	AdaptiveEMA_t ema_filter;
+	// min_alpha=0.03 (wygładzanie), max_alpha=0.6 (szybka reakcja), threshold=20.0 (próg błędu mm)
+	AdaptiveEMA_Init(&ema_filter, 0.03f, 0.6f, 20.0f);
+	
+	while (1) {
+		// Miganie LED na początku pętli (co 20 iteracji dla lepszej widoczności przy szybszej pętli)
+		if (loop_counter % 20 == 0) {
+			HAL_GPIO_TogglePin(GPIOB, LD2_Pin);
 		}
-
-		// 1. CZYTANIE CZUJNIKA (Non-stop)
-		distance = VL53L0X_ReadDistance(&tof);
-
+		
+		// Odczyt dystansu w trybie continuous (szybki)
+		distance = readRangeContinuousMillimeters(&distanceStr);
+		
 		if (distance != 0xFFFF && distance < 8190) {
 			// Korekta na promień kulki
 			distance += BALL_RADIUS;
-
-			// --- KALIBRACJA LINIOWA (MAPPING) ---
-			// Odczyt MIN (palec): ~80mm -> Cel: 0mm
-			// Odczyt MAX (koniec): ~317mm -> Cel: 300mm
-			// Wzór: Y = (X - 80) * 1.26
 			
+			// Kalibracja liniowa
 			float dist_calibrated = ((float)distance - 80.0f) * 1.26f;
-			
 			if (dist_calibrated < 0.0f) dist_calibrated = 0.0f;
 			if (dist_calibrated > 300.0f) dist_calibrated = 300.0f;
-			
 			distance = (uint16_t)dist_calibrated;
-
-#if SENSOR_TEST_MODE
-			// Logowanie w standardowym formacie (aby aplikacja/wykres go rozpoznały)
-			char test_buf[64];
-			int t_len = sprintf(test_buf, "D:%d;A:%d;F:%d;E:0", distance, (int)current_servo_angle, distance);
-			uint8_t t_crc = CalculateCRC8(test_buf, t_len);
-			sprintf(msg, "%s;C:%02X\r\n", test_buf, t_crc);
-			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 10);
-#endif
-
-			// Średnia krocząca
-			dist_history[dist_idx] = (float) distance;
-			dist_idx = (dist_idx + 1) % MOVING_AVG_SIZE;
-
-			// Policz średnią
-			dist_sum = 0;
-			for (int i = 0; i < MOVING_AVG_SIZE; i++)
-				dist_sum += dist_history[i];
-			float avg_dist = dist_sum / (float) MOVING_AVG_SIZE;
-
-			// 2. OBLICZANIE PID (Tylko co PID_DT_MS)
-			if (HAL_GetTick() - last_pid_time >= PID_DT_MS) {
-				last_pid_time = HAL_GetTick();
-
-				// Używamy uśrednionej wartości avg_dist
-				float pid_out = PID_Compute(&pid, g_setpoint, avg_dist);
-
-				float target_servo_angle = SERVO_CENTER + pid_out;
-				float alpha = 0.4f; // Zachowujemy wygładzanie wyjścia serwa
-				current_servo_angle = current_servo_angle * (1.0f - alpha) + target_servo_angle * alpha;
-
-				if (current_servo_angle > SERVO_MAX_LIMIT)
-					current_servo_angle = SERVO_MAX_LIMIT;
-				if (current_servo_angle < SERVO_MIN_LIMIT)
-					current_servo_angle = SERVO_MIN_LIMIT;
-
-				Servo_SetAngle(&servo, (uint16_t) current_servo_angle);
-
-				// === WYSYŁANIE Z CRC ===
-				float current_error = g_setpoint - avg_dist;
-				char data_buffer[64];
-				int len = sprintf(data_buffer, "D:%d;A:%d;F:%d;E:%d", distance, (int) current_servo_angle,
-						(int) avg_dist, (int) current_error);
-				uint8_t out_crc = CalculateCRC8(data_buffer, len);
-
-				sprintf(msg, "%s;C:%02X\r\n", data_buffer, out_crc);
-				HAL_UART_Transmit(&huart3, (uint8_t*) msg, strlen(msg), 100);
-			}
+			
+			// Filtracja EMA
+			float filtered_dist = AdaptiveEMA_Filter(&ema_filter, (float)distance);
+			
+			// Wysyłanie w formacie z CRC
+			float current_servo_angle = SERVO_CENTER; // Na razie stała wartość
+			float current_error = g_setpoint - filtered_dist;
+			
+			char data_buffer[64];
+			int len = sprintf(data_buffer, "D:%d;A:%d;F:%d;E:%d", 
+				distance, (int)current_servo_angle, (int)filtered_dist, (int)current_error);
+			uint8_t out_crc = CalculateCRC8(data_buffer, len);
+			
+			sprintf(msg, "%s;C:%02X\r\n", data_buffer, out_crc);
+			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 10); // Timeout 10ms zamiast 100ms!
 		}
+		
+		loop_counter++;
+		
+    /* USER CODE END WHILE */
 
-#if SENSOR_TEST_MODE
-		// Debug logging - always print distance status
-		if (distance == 0xFFFF) {
-			HAL_UART_Transmit(&huart3, (uint8_t*)".", 1, 10); // Busy/Timeout indicator
-		} else {
-			char dbg_s[64];
-			uint8_t status = VL53L0X_GetRangeStatus(&tof);
-			sprintf(dbg_s, "DIST: %d, STATUS: %d\r\n", distance, status);
-			HAL_UART_Transmit(&huart3, (uint8_t*)dbg_s, strlen(dbg_s), 10);
-		}
-#endif
-		
-		// Heartbeat - Miganie LD2 co obieg pętli (dla diagnostyki zawieszeń)
-		HAL_GPIO_TogglePin(GPIOB, LD2_Pin);
-		HAL_Delay(10); // Małe opóźnienie dla stabilności pętli
-		
-		// Brak HAL_Delay - max speed loop
-  }
+    /* USER CODE BEGIN 3 */
+	}
   /* USER CODE END 3 */
 }
 
@@ -641,7 +403,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x20303E5D; // Timing zgodny z Twoim konfiguratorem
+  hi2c1.Init.Timing = 0x20303E5D;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -748,7 +510,7 @@ static void MX_USART3_UART_Init(void)
 
   /* USER CODE END USART3_Init 1 */
   huart3.Instance = USART3;
-  huart3.Init.BaudRate = 9600;
+  huart3.Init.BaudRate = 115200;
   huart3.Init.WordLength = UART_WORDLENGTH_8B;
   huart3.Init.StopBits = UART_STOPBITS_1;
   huart3.Init.Parity = UART_PARITY_NONE;
@@ -860,40 +622,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-	if (huart->Instance == USART3) {
-        // Toggle LED to indicate activity
-        HAL_GPIO_TogglePin(GPIOB, LD1_Pin); 
-
-		if (rx_byte == '\n' || rx_byte == '\r') {
-			// Koniec ramki
-			if (rx_idx > 0) {
-				rx_buffer[rx_idx] = 0; // Null terminate
-				cmd_received = 1;
-			}
-			rx_idx = 0; // Reset bufora
-		} else {
-			if (rx_idx < 63) {
-				rx_buffer[rx_idx++] = rx_byte;
-			} else {
-				// Overflow protection
-				rx_idx = 0;
-			}
-		}
-		// Wznów nasłuchiwanie
-		HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
-	}
-}
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
-	if (huart->Instance == USART3) {
-		// ORE (Overrun) or Noise Error. Restart.
-        // Opcjonalnie: Toggle Red LED
-        HAL_GPIO_TogglePin(GPIOB, LD3_Pin);
-		HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
-	}
-}
 
 /* USER CODE END 4 */
 
