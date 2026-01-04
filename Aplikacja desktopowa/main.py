@@ -102,6 +102,11 @@ class UARTApp:
         self.error_value_var = tk.StringVar(value="---")
         ttk.Label(display_frame, textvariable=self.error_value_var,
                   font=("Segoe UI", 16, "bold"), foreground="#ff0000").grid(row=2, column=1, sticky="e")
+
+        ttk.Label(display_frame, text="FREQ:", font=("Segoe UI", 9, "bold"), foreground="#666666").grid(row=3, column=0, sticky="w")
+        self.hz_value_var = tk.StringVar(value="--- Hz")
+        ttk.Label(display_frame, textvariable=self.hz_value_var,
+                  font=("Segoe UI", 12, "bold"), foreground="#666666").grid(row=3, column=1, sticky="e")
         display_frame.columnconfigure(1, weight=1)
 
 
@@ -335,14 +340,19 @@ class UARTApp:
 
     def send_setpoint(self, force=False):
         if not self.serial or not self.running: 
-            return
+            pass # self.log_message("[DEBUG] Serial not ready\n")
             
         if not force and (time.time() - self.last_setpoint_send_time < 0.1):
             return
 
         try:
-            val = self.setpoint_var.get()
-            cmd = f"SET:{val:.1f}"
+            val = float(self.setpoint_var.get())
+            if force:
+               # print(f"Sending SETPOINT: {val}")
+               pass
+            
+            # Format CMD: "S:150.0"
+            cmd = f"S:{val:.1f}"
             crc = self.calculate_crc8(cmd)
             msg = f"{cmd};C:{crc:02X}"
             self.serial.write((msg + '\n').encode())
@@ -359,15 +369,26 @@ class UARTApp:
             return
 
         try:
-            # Format: PID:Kp;Ki;Kd
+            # Format: Send P, I, D separately to match STM32 logic
             kp = self.kp_var.get()
             ki = self.ki_var.get()
             kd = self.kd_var.get()
-            cmd = f"PID:{kp:.4f};{ki:.5f};{kd:.1f}"
-            crc = self.calculate_crc8(cmd)
-            msg = f"{cmd};C:{crc:02X}"
-            self.serial.write((msg + '\n').encode())
-            self.log_message(f"[PID update] {cmd}\n")
+            
+            # Send P
+            cmd_p = f"P:{kp:.4f}"
+            self.serial.write((f"{cmd_p};C:{self.calculate_crc8(cmd_p):02X}\n").encode())
+            time.sleep(0.2) # Delay > STM32 loop time (100ms budget)
+            
+            # Send I
+            cmd_i = f"I:{ki:.5f}"
+            self.serial.write((f"{cmd_i};C:{self.calculate_crc8(cmd_i):02X}\n").encode())
+            time.sleep(0.2)
+            
+            # Send D
+            cmd_d = f"D:{kd:.1f}"
+            self.serial.write((f"{cmd_d};C:{self.calculate_crc8(cmd_d):02X}\n").encode())
+            
+            self.log_message(f"[PID update] P:{kp} I:{ki} D:{kd}\n")
             self.last_pid_send_time = time.time()
         except Exception as e:
             self.log_message(f"[Python Error] {e}\n")
@@ -391,17 +412,26 @@ class UARTApp:
             time.sleep(0.01)
 
     def process_line(self, line):
-        # Obliczanie częstotliwości próbkowania
-        self.sample_rate_counter += 1
+        # Log active period
         current_time = time.time()
         elapsed = current_time - self.sample_rate_start_time
         
         if elapsed >= 1.0:  # Co sekundę
             self.current_sample_rate = self.sample_rate_counter / elapsed
             self.log_message(f"[SAMPLE RATE] {self.current_sample_rate:.2f} Hz\n")
+            # Update GUI label
+            self.hz_value_var.set(f"{self.current_sample_rate:.1f} Hz")
             self.sample_rate_counter = 0
             self.sample_rate_start_time = current_time
         
+        # Logowanie surowych danych (opcjonalnie można wyłączyć dla wydajności przy wysokim Hz)
+        # self.log_message(f"{line}\n") 
+        # Zamiast logować wszystko, logujmy tylko błędy lub inne komunikaty, 
+        # a dane "D:..." tylko jeśli chcemy. Na razie zostawię logowanie wszystkiego, 
+        # ale warto pamiętać że to obciąża GUI.
+        
+        # Sprawdzamy czy to dane (nie logujemy ich wtedy do terminala żeby nie śmiecić, albo logujemy)
+        # Decyzja: Logujemy wszystko jak było, ale licznik próbek tylko w update_chart
         self.log_message(f"{line}\n")
         self.update_chart(line)
 
@@ -491,6 +521,9 @@ class UARTApp:
             pass
         
         if val_y is not None:
+            # Zliczamy poprawną próbkę
+            self.sample_rate_counter += 1
+            
             # --- CLAMPING (Ograniczenie zakresu) ---
             val_y = max(self.clamp_min, min(val_y, self.clamp_max))
 

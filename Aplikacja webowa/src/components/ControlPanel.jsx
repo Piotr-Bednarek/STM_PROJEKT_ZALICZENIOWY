@@ -9,16 +9,7 @@ const SliderControl = ({ label, value, onChange, min, max, step, onCommit, unit 
                     {value} {unit}
                 </span>
             </div>
-            <input
-                type="range"
-                min={min}
-                max={max}
-                step={step}
-                value={value}
-                onChange={(e) => onChange(parseFloat(e.target.value))}
-                onMouseUp={() => onCommit && onCommit(value)}
-                onTouchEnd={() => onCommit && onCommit(value)}
-            />
+            <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} onMouseUp={() => onCommit && onCommit(value)} onTouchEnd={() => onCommit && onCommit(value)} />
         </div>
     );
 };
@@ -27,10 +18,10 @@ import { BeamVisualizer } from "./BeamVisualizer";
 
 export const ControlPanel = ({ sendPid, sendSetpoint, distance = 0, externalSetpoint = 150 }) => {
     const [controlMode, setControlMode] = useState("PID");
-    const [setpoint, setSetpoint] = useState(150);
-    const [kp, setKp] = useState(0.11); // Positive UI
-    const [ki, setKi] = useState(0.004); // Positive UI
-    const [kd, setKd] = useState(2.0); // Positive UI
+    const [setpoint, setSetpoint] = useState(145); // Updated to beam center (290/2)
+    const [kp, setKp] = useState(0.29); // Updated to match firmware
+    const [ki, setKi] = useState(0.0003); // Updated to match firmware
+    const [kd, setKd] = useState(9.0); // Updated to match firmware
 
     // Sync local setpoint state with external (optimistic) updates or if connection resets
     React.useEffect(() => {
@@ -40,7 +31,7 @@ export const ControlPanel = ({ sendPid, sendSetpoint, distance = 0, externalSetp
     }, [externalSetpoint]);
 
     const handlePidCommit = () => {
-        sendPid(-kp, -ki, -kd); // Send negative values to STM32
+        sendPid(kp, ki, kd); // Send positive values to STM32 (main.c no longer inverts)
     };
 
     const handleVizChange = (val) => {

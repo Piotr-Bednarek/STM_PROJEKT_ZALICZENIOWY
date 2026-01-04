@@ -11,6 +11,7 @@ export const useSerial = () => {
         error: 0,
         control: 0,
         setpoint: 150,
+        freq: 0,
     });
 
     const readerRef = useRef(null);
@@ -21,10 +22,10 @@ export const useSerial = () => {
 
     // Buffer for incoming chunks
     const bufferRef = useRef("");
-    const MAX_HISTORY = 200;
+    const MAX_HISTORY = 100; // Reduced from 200 to save memory
 
     const log = useCallback((msg, type = "info") => {
-        setLogs((prev) => [...prev.slice(-99), { time: new Date().toLocaleTimeString(), msg, type }]);
+        setLogs((prev) => [...prev.slice(-49), { time: new Date().toLocaleTimeString(), msg, type }]); // Keep last 50 only
     }, []);
 
     const calculateCRC8 = (text) => {
@@ -48,9 +49,23 @@ export const useSerial = () => {
     const latestDataRef = useRef({ distance: 0, filtered: 0, error: 0, control: 0, setpoint: 150 });
     const newDataAvailableRef = useRef(false);
 
+    const sampleCountRef = useRef(0);
+    const lastFreqUpdateRef = useRef(Date.now());
+
     // Throttled update loop
     useEffect(() => {
         const interval = setInterval(() => {
+            const now = Date.now();
+
+            // Calculate Frequency every 1s (approx)
+            if (now - lastFreqUpdateRef.current >= 1000) {
+                const hz = sampleCountRef.current;
+                latestDataRef.current.freq = hz;
+                sampleCountRef.current = 0;
+                lastFreqUpdateRef.current = now;
+                newDataAvailableRef.current = true; // Force update to show new freq
+            }
+
             if (newDataAvailableRef.current) {
                 // Clone stats to trigger re-render
                 const snap = { ...latestDataRef.current };
@@ -89,12 +104,13 @@ export const useSerial = () => {
 
         if (valid) {
             // Update Ref directly (fast, no render)
+            sampleCountRef.current++;
             const segments = payload.split(";");
             const currentFnData = latestDataRef.current; // access ref
 
             segments.forEach((seg) => {
                 if (seg.startsWith("D:")) {
-                    currentFnData.distance = Math.max(0, Math.min(parseFloat(seg.substring(2)), 300));
+                    currentFnData.distance = Math.max(0, Math.min(parseFloat(seg.substring(2)), 290));
                 } else if (seg.startsWith("F:")) {
                     currentFnData.filtered = parseFloat(seg.substring(2));
                 } else if (seg.startsWith("E:")) {
@@ -119,7 +135,7 @@ export const useSerial = () => {
 
         try {
             const selectedPort = await navigator.serial.requestPort();
-            await selectedPort.open({ baudRate: 9600 }); // Default match Python app
+            await selectedPort.open({ baudRate: 115200 }); // Default match Python app
 
             setPort(selectedPort);
             setIsConnected(true);
@@ -269,16 +285,26 @@ export const useSerial = () => {
     };
 
     const sendSetpoint = (val) => {
-        // Format: SET:150.0
-        sendCommand(`SET:${val.toFixed(1)}`);
+        // Format: S:150.0
+        sendCommand(`S:${val.toFixed(1)}`);
         // Update both Reace state (optimistic) AND Ref (so loop doesn't overwrite it with 0)
         latestDataRef.current.setpoint = val;
         setLatestData((prev) => ({ ...prev, setpoint: val }));
     };
 
-    const sendPid = (kp, ki, kd) => {
-        // Format: PID:Kp;Ki;Kd
-        sendCommand(`PID:${kp.toFixed(4)};${ki.toFixed(5)};${kd.toFixed(1)}`);
+    const sendPid = async (kp, ki, kd) => {
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+        // Send P
+        await sendCommand(`P:${kp.toFixed(4)}`);
+        await delay(200);
+
+        // Send I
+        await sendCommand(`I:${ki.toFixed(5)}`);
+        await delay(200);
+
+        // Send D
+        await sendCommand(`D:${kd.toFixed(1)}`);
     };
 
     return {

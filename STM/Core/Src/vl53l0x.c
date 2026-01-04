@@ -78,7 +78,13 @@ void writeReg32Bit(uint8_t reg, uint32_t value){
 uint8_t readReg(uint8_t reg) {
   uint8_t value = 0;
 
-  i2cStat = HAL_I2C_Mem_Read(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, i2cMsgBuffer, 1, I2C_TIMEOUT);
+  for(int retry = 0; retry < 3; retry++) {
+      i2cStat = HAL_I2C_Mem_Read(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, i2cMsgBuffer, 1, I2C_TIMEOUT);
+      if(i2cStat == HAL_OK) break;
+      // Jeśli błąd, krótka pauza przed ponowieniem
+      if (retry < 2) HAL_Delay(1);
+  }
+
   if (i2cStat != HAL_OK) {
       char msg[32];
       sprintf(msg, "I2C Rd Err: %d Rg: %02X\r\n", i2cStat, reg);
@@ -385,7 +391,13 @@ bool initVL53L0X(bool io_2v8, I2C_HandleTypeDef *handler){
 
   // VL53L0X_StaticInit() end
 
+  // CRITICAL FIX: Relax phase limits BEFORE performing calibration
+  // Default tuning settings set restrictive limits (0x08, 0x30/0x28)
+  // that cause Phase Fail (Status 4). Override with relaxed limits.
+  setPhaseCalibrationLimits(0x00, 0xFF, 0x00, 0xFF);
+
   // VL53L0X_PerformRefCalibration() begin (VL53L0X_perform_ref_calibration())
+
 
   // -- VL53L0X_perform_vhv_calibration() begin
 
@@ -614,6 +626,9 @@ bool setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
   if (type == VcselPeriodPreRange)
   {
     // "Set phase check limits"
+    // DISABLED: These hardcoded limits are too strict and cause Phase Fail (S:4)
+    // Use setPhaseCalibrationLimits() to manually configure instead
+    /*
     switch (period_pclks)
     {
       case 12:
@@ -637,6 +652,7 @@ bool setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
         return false;
     }
     writeReg(PRE_RANGE_CONFIG_VALID_PHASE_LOW, 0x08);
+    */
 
     // apply new VCSEL period
     writeReg(PRE_RANGE_CONFIG_VCSEL_PERIOD, vcsel_period_reg);
@@ -667,11 +683,13 @@ bool setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
   }
   else if (type == VcselPeriodFinalRange)
   {
+    // DISABLED PHASE LIMITS: Hardcoded limits removed - use setPhaseCalibrationLimits() instead
+    // Keeping only VCSEL_WIDTH and PHASECAL config
     switch (period_pclks)
     {
       case 8:
-        writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_HIGH, 0x10);
-        writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_LOW,  0x08);
+        // writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_HIGH, 0x10);
+        // writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_LOW,  0x08);
         writeReg(GLOBAL_CONFIG_VCSEL_WIDTH, 0x02);
         writeReg(ALGO_PHASECAL_CONFIG_TIMEOUT, 0x0C);
         writeReg(0xFF, 0x01);
@@ -680,8 +698,8 @@ bool setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
         break;
 
       case 10:
-        writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_HIGH, 0x28);
-        writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_LOW,  0x08);
+        // writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_HIGH, 0x28);
+        // writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_LOW,  0x08);
         writeReg(GLOBAL_CONFIG_VCSEL_WIDTH, 0x03);
         writeReg(ALGO_PHASECAL_CONFIG_TIMEOUT, 0x09);
         writeReg(0xFF, 0x01);
@@ -690,8 +708,8 @@ bool setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
         break;
 
       case 12:
-        writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_HIGH, 0x38);
-        writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_LOW,  0x08);
+        // writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_HIGH, 0x38);
+        // writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_LOW,  0x08);
         writeReg(GLOBAL_CONFIG_VCSEL_WIDTH, 0x03);
         writeReg(ALGO_PHASECAL_CONFIG_TIMEOUT, 0x08);
         writeReg(0xFF, 0x01);
@@ -700,8 +718,8 @@ bool setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
         break;
 
       case 14:
-        writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_HIGH, 0x48);
-        writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_LOW,  0x08);
+        // writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_HIGH, 0x48);
+        // writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_LOW,  0x08);
         writeReg(GLOBAL_CONFIG_VCSEL_WIDTH, 0x03);
         writeReg(ALGO_PHASECAL_CONFIG_TIMEOUT, 0x07);
         writeReg(0xFF, 0x01);
@@ -842,6 +860,8 @@ uint16_t readRangeContinuousMillimeters( statInfo_t_VL53L0X *extraStats ) {
   uint16_t temp;
   startTimeout();
   while ((readReg(RESULT_INTERRUPT_STATUS) & 0x07) == 0) {
+    // Pauza żeby nie zapychać I2C ciągłym odpytywaniem
+    HAL_Delay(2);
     if (checkTimeoutExpired())
     {
       g_isTimeout = true;
@@ -917,7 +937,21 @@ uint16_t getTimeout(void){
   return g_ioTimeout;
 }
 
+// Set manual phase calibration limits
+// This allows relaxing the phase check to prevent Phase Fail (Status 4) errors
+// Recommended values for difficult targets or continuous fast mode:
+//   PRE_RANGE: LOW=0x00, HIGH=0xFF
+//   FINAL_RANGE: LOW=0x00, HIGH=0xFF
+void setPhaseCalibrationLimits(uint8_t pre_range_low, uint8_t pre_range_high,
+                                uint8_t final_range_low, uint8_t final_range_high) {
+    writeReg(PRE_RANGE_CONFIG_VALID_PHASE_LOW, pre_range_low);
+    writeReg(PRE_RANGE_CONFIG_VALID_PHASE_HIGH, pre_range_high);
+    writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_LOW, final_range_low);
+    writeReg(FINAL_RANGE_CONFIG_VALID_PHASE_HIGH, final_range_high);
+}
+
 // Private Methods /////////////////////////////////////////////////////////////
+
 
 // Get reference SPAD (single photon avalanche diode) count and type
 // based on VL53L0X_get_info_from_device(),

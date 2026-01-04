@@ -50,7 +50,7 @@ export const Dashboard = () => {
                         <Metrics data={latestData} />
 
                         {/* Control Panel */}
-                        <ControlPanel sendSetpoint={sendSetpoint} sendPid={sendPid} distance={latestData.distance} externalSetpoint={latestData.setpoint} />
+                        <ControlPanel sendSetpoint={sendSetpoint} sendPid={sendPid} distance={latestData.filtered} externalSetpoint={latestData.setpoint} />
 
                         {/* Terminal */}
                         <div style={{ flex: 1, minHeight: "200px" }}>

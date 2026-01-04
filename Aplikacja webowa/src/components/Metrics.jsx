@@ -20,6 +20,7 @@ export const Metrics = ({ data }) => {
             <MetricCard label="Dystans (Raw)" value={data.distance.toFixed(0)} unit="mm" color="var(--chart-dist)" />
             <MetricCard label="Dystans (Filtrowany)" value={data.filtered.toFixed(0)} unit="mm" color="var(--chart-filter)" />
             <MetricCard label="Uchyb (Błąd)" value={data.error.toFixed(1)} unit="mm" color="var(--chart-error)" />
+            <MetricCard label="Częstotliwość" value={data.freq} unit="Hz" color="var(--text-secondary)" />
         </div>
     );
 };

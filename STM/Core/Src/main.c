@@ -25,18 +25,27 @@
 
 #include "VL53L0X.h"
 #include <stdio.h>
+#include <stdlib.h> // for atof
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+// --- PID Controller ---
+typedef struct {
+	float Kp;
+	float Ki;
+	float Kd;
+	float prevError;
+	float integral;
+} ServoPID_Controller;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // --- Parametry Systemu ---
-#define SETPOINT_DEFAULT   200.0f
+#define SETPOINT_DEFAULT   100.0f
 #define BALL_RADIUS        20
 #define PID_DT_MS          30
 
@@ -74,7 +83,7 @@ __attribute__((at(0x2007c0a0))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT
 #elif defined ( __GNUC__ ) /* GNU Compiler */
 
 ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection"))); /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));   /* Ethernet Tx DMA Descriptors */
+ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection"))); /* Ethernet Tx DMA Descriptors */
 #endif
 
 ETH_TxPacketConfig TxConfig;
@@ -100,10 +109,13 @@ volatile uint8_t rx_idx = 0;
 volatile uint8_t cmd_received = 0;
 
 // Zmienne Globalne Sterowania
-volatile float g_setpoint = SETPOINT_DEFAULT;
-volatile float g_Kp = -0.11f;
+// Ball position range: 0-290mm (0 = ball at start, 290 = ball at end)
+volatile float g_setpoint = 145.0f; // Middle of beam (290/2)
+volatile float g_Kp = -0.29f;
 volatile float g_Ki = -0.004f;
 volatile float g_Kd = -2.0f;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -126,10 +138,78 @@ typedef struct {
 
 void AdaptiveEMA_Init(AdaptiveEMA_t *ema, float min_alpha, float max_alpha, float threshold);
 float AdaptiveEMA_Filter(AdaptiveEMA_t *ema, float measurement);
+
+// Forward declarations
+void SetServoAngle(float angle);
+void ServoPID_Init(ServoPID_Controller *pid);
+float ServoPID_Compute(ServoPID_Controller *pid, float error);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	if (huart->Instance == USART3) {
+		if (rx_byte == '\n' || rx_byte == '\r') {
+			rx_buffer[rx_idx] = '\0';
+			if (rx_idx > 0) cmd_received = 1;
+			rx_idx = 0;
+		} else {
+			if (rx_idx < 63) {
+				rx_buffer[rx_idx++] = rx_byte;
+			}
+		}
+		HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
+	}
+}
+// --- Median Filter ---
+#define MEDIAN_WINDOW_SIZE 9
+typedef struct {
+	float buffer[MEDIAN_WINDOW_SIZE];
+	uint8_t index;
+	uint8_t count;
+} MedianFilter_t;
+
+void MedianFilter_Init(MedianFilter_t *filter) {
+	filter->index = 0;
+	filter->count = 0;
+	for (int i = 0; i < MEDIAN_WINDOW_SIZE; i++) {
+		filter->buffer[i] = 0.0f;
+	}
+}
+
+float MedianFilter_Apply(MedianFilter_t *filter, float v) {
+	// Insert new value
+	filter->buffer[filter->index] = v;
+	filter->index = (filter->index + 1) % MEDIAN_WINDOW_SIZE;
+	if (filter->count < MEDIAN_WINDOW_SIZE) {
+		filter->count++;
+	}
+
+	// Create a temporary array for sorting
+	float sorted[MEDIAN_WINDOW_SIZE];
+	for (int i = 0; i < filter->count; i++) {
+		sorted[i] = filter->buffer[i];
+	}
+
+	// Simple Bubble Sort (optimized for small size 9)
+	for (int i = 0; i < filter->count - 1; i++) {
+		for (int j = 0; j < filter->count - i - 1; j++) {
+			if (sorted[j] > sorted[j + 1]) {
+				float temp = sorted[j];
+				sorted[j] = sorted[j + 1];
+				sorted[j + 1] = temp;
+			}
+		}
+	}
+
+	// Return median
+	if (filter->count % 2 == 0) {
+		return (sorted[filter->count / 2 - 1] + sorted[filter->count / 2]) / 2.0f;
+	} else {
+		return sorted[filter->count / 2];
+	}
+}
+
 void AdaptiveEMA_Init(AdaptiveEMA_t *ema, float min_alpha, float max_alpha, float threshold) {
 	ema->min_alpha = min_alpha;
 	ema->max_alpha = max_alpha;
@@ -153,13 +233,145 @@ float AdaptiveEMA_Filter(AdaptiveEMA_t *ema, float measurement) {
 	return ema->value;
 }
 
+// --- 1-Euro Filter Implementation ---
+// Based on: http://cristal.univ-lille.fr/~casiez/1euro/
+typedef struct {
+    float min_cutoff; // Minimum cutoff frequency (Hz)
+    float beta;       // Speed coefficient
+    float d_cutoff;   // Cutoff frequency for derivative (Hz)
+    float x_prev;     // Previous value
+    float dx_prev;    // Previous derivative
+    uint32_t t_prev;  // Previous timestamp (ms)
+    int first_run;    // Flag for first run
+} OneEuroFilter_t;
+
+void OneEuro_Init(OneEuroFilter_t *f, float min_cutoff, float beta, float d_cutoff) {
+    f->min_cutoff = min_cutoff;
+    f->beta = beta;
+    f->d_cutoff = d_cutoff;
+    f->x_prev = 0.0f;
+    f->dx_prev = 0.0f;
+    f->t_prev = 0;
+    f->first_run = 1;
+}
+
+float OneEuro_Update(OneEuroFilter_t *f, float x, uint32_t t_now) {
+    if (f->first_run) {
+        f->x_prev = x;
+        f->dx_prev = 0.0f;
+        f->t_prev = t_now;
+        f->first_run = 0;
+        return x;
+    }
+
+    float dt = (t_now - f->t_prev) / 1000.0f; // Convert ms to seconds
+    if (dt <= 0.0f) return f->x_prev; // Zero or negative time diff (shouldn't happen)
+    
+    // 1. Compute derivative (dx)
+    float dx = (x - f->x_prev) / dt;
+
+    // 2. Filter derivative (Low Pass)
+    float rc_d = 1.0f / (2.0f * 3.14159f * f->d_cutoff);
+    float alpha_d = 1.0f / (1.0f + rc_d / dt);
+    float dx_hat = dx * alpha_d + f->dx_prev * (1.0f - alpha_d);
+
+    // 3. Compute dynamic cutoff based on speed
+    float cutoff = f->min_cutoff + f->beta * (dx_hat > 0 ? dx_hat : -dx_hat); // abs(dx)
+
+    // 4. Filter signal (Low Pass with dynamic cutoff)
+    float rc = 1.0f / (2.0f * 3.14159f * cutoff);
+    float alpha = 1.0f / (1.0f + rc / dt);
+    float x_hat = x * alpha + f->x_prev * (1.0f - alpha);
+
+    // Update state
+    f->x_prev = x_hat;
+    f->dx_prev = dx_hat;
+    f->t_prev = t_now;
+
+    return x_hat;
+}
+
+// --- PID Implementation ---
+void ServoPID_Init(ServoPID_Controller *pid) {
+	pid->Kp = 0.0f;
+	pid->Ki = 0.0f;
+	pid->Kd = 0.0f;
+	pid->prevError = 0.0f;
+	pid->integral = 0.0f;
+}
+
+float ServoPID_Compute(ServoPID_Controller *pid, float error) {
+	// Update PID terms from global variables (UART control)
+	pid->Kp = g_Kp;
+	pid->Ki = g_Ki;
+	pid->Kd = g_Kd;
+
+	float P = pid->Kp * error;
+
+	// IMPROVED ANTI-WINDUP: Only accumulate integral if output is NOT saturated
+	// This prevents integral buildup when servo is at physical limits (65-135°)
+	float tentative_output = SERVO_CENTER + P + (pid->Ki * pid->integral);
+	
+	// Track how long we've been stuck at limits
+	static uint8_t stuck_at_limit_counter = 0;
+	
+	// Use margin: only accumulate if we're at least 2° away from limits
+	// This prevents buzzing at exact limit values
+	if (tentative_output >= (SERVO_MIN_LIMIT + 2.0f) && tentative_output <= (SERVO_MAX_LIMIT - 2.0f)) {
+	    pid->integral += error;
+	    stuck_at_limit_counter = 0; // Reset counter when not at limit
+	} else {
+	    // At or near limits - decay integral slowly to allow recovery
+	    pid->integral *= 0.9f; // Faster decay: 10% per iteration (was 5%)
+	    
+	    // If stuck at limit for >10 iterations, RESET integral completely
+	    stuck_at_limit_counter++;
+	    if (stuck_at_limit_counter > 10) {
+	        pid->integral = 0.0f; // Hard reset to stop buzzing
+	        stuck_at_limit_counter = 0;
+	    }
+	}
+	
+	// Limit integral to prevent extreme values
+	if (pid->integral > 5000.0f) pid->integral = 5000.0f;
+	if (pid->integral < -5000.0f) pid->integral = -5000.0f;
+    
+	float I = pid->Ki * pid->integral;
+
+	float D = pid->Kd * (error - pid->prevError);
+	pid->prevError = error;
+
+	float output = SERVO_CENTER + P + I + D;
+	return output;
+}
+
+
+
+
+void SetServoAngle(float angle) {
+	// Mapping: 0 deg -> 500us (2.5%), 180 deg -> 2500us (12.5%)
+	// ARR = 19999 (20ms period)
+	// Pulse = 500 + (angle / 180.0) * 2000
+    // Simplified mapping for typical SG90/MG996R:
+    // 0 deg = ~500 (Compare value)
+    // 180 deg = ~2500 (Compare value)
+    
+    if (angle < 0.0f) angle = 0.0f;
+    if (angle > 180.0f) angle = 180.0f;
+
+    uint32_t pulse_length = (uint32_t)(500.0f + (angle / 180.0f) * 2000.0f);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse_length);
+}
+
 uint8_t CalculateCRC8(const char *data, int len) {
 	uint8_t crc = 0x00;
 	for (int i = 0; i < len; i++) {
 		crc ^= data[i];
 		for (uint8_t j = 0; j < 8; j++) {
-			if (crc & 0x80) crc = (crc << 1) ^ 0x07;
-			else crc <<= 1;
+			if (crc & 0x80)
+				crc = (crc << 1) ^ 0x07;
+			else
+				crc <<= 1;
 		}
 	}
 	return crc;
@@ -167,458 +379,630 @@ uint8_t CalculateCRC8(const char *data, int len) {
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
-{
+ * @brief  The application entry point.
+ * @retval int
+ */
+int main(void) {
 
-  /* USER CODE BEGIN 1 */
+	/* USER CODE BEGIN 1 */
 
-  /* USER CODE END 1 */
+	/* USER CODE END 1 */
 
-  /* MCU Configuration--------------------------------------------------------*/
+	/* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+	HAL_Init();
 
-  /* USER CODE BEGIN Init */
+	/* USER CODE BEGIN Init */
 	HAL_Delay(500); // Czekaj na ustabilizowanie zasilania czujników
-  /* USER CODE END Init */
+	/* USER CODE END Init */
 
-  /* Configure the system clock */
-  SystemClock_Config();
+	/* Configure the system clock */
+	SystemClock_Config();
 
-  /* USER CODE BEGIN SysInit */
+	/* USER CODE BEGIN SysInit */
 
-  /* USER CODE END SysInit */
+	/* USER CODE END SysInit */
 
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_ETH_Init();
-  MX_USART3_UART_Init();
-  MX_USB_OTG_FS_PCD_Init();
-  MX_TIM3_Init();
-  MX_I2C1_Init();
-  /* USER CODE BEGIN 2 */
+	/* Initialize all configured peripherals */
+	MX_GPIO_Init();
+	MX_ETH_Init();
+	MX_USART3_UART_Init();
+	MX_USB_OTG_FS_PCD_Init();
+	MX_TIM3_Init();
+	MX_I2C1_Init();
+	/* USER CODE BEGIN 2 */
+
+	// Start PWM for Servo (TIM3 Channel 1)
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+	SetServoAngle(SERVO_CENTER); // Ustaw na 100 stopni (środek)
 
 	// Inicjalizacja VL53L0X
 	statInfo_t_VL53L0X distanceStr;
-	
-	HAL_UART_Transmit(&huart3, (uint8_t*)"Initializing VL53L0X...\r\n", 25, 100);
+
+	// CRITICAL: Wait for I2C bus and sensor to stabilize
+	// VL53L0X requires ~2ms boot time after power-on, plus I2C settling
+	HAL_Delay(100); // 100ms to ensure sensor is ready
+
+	HAL_UART_Transmit(&huart3, (uint8_t*) "Initializing VL53L0X...\r\n", 25, 100);
 	if (!initVL53L0X(1, &hi2c1)) {
-		HAL_UART_Transmit(&huart3, (uint8_t*)"VL53L0X Init Failed!\r\n", 22, 100);
+		HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init Failed!\r\n", 22, 100);
 	} else {
-		HAL_UART_Transmit(&huart3, (uint8_t*)"VL53L0X Init Success!\r\n", 23, 100);
+		HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init Success!\r\n", 23, 100);
 	}
-	
+
+
 	// Ustaw timeout dla odczytów - musi być większy niż timing budget
-	setTimeout(35); // 35ms timeout dla readRange
-	
 	// Configure the sensor for FAST continuous measurements
-	setSignalRateLimit(200);
-	setVcselPulsePeriod(VcselPeriodPreRange, 14);
-	setVcselPulsePeriod(VcselPeriodFinalRange, 10);
-	setMeasurementTimingBudget(25000); // 25ms = ~40 Hz (szybsze próbkowanie)
+	// ULTRA-LOW Signal Rate Limit to accept very weak signals
+	// Status 6 (Signal Fail) requires even lower threshold
+	setSignalRateLimit(0.005f); // Was 0.01, now 0.005 = ultra-sensitive
+
 	
+	// CRITICAL FIX for Phase Fail (S:4): Relax phase limits BEFORE VCSEL config
+	// setVcselPulsePeriod() triggers phase calibration, so limits must be set first!
+	// Default limits (0x08, 0x50/0x48) are too strict for continuous fast mode
+
+	setPhaseCalibrationLimits(
+	    0x00,  // PRE_RANGE LOW (was 0x08)
+	    0xFF,  // PRE_RANGE HIGH (was 0x50 for VCSEL=18)
+	    0x00,  // FINAL_RANGE LOW (was 0x08)
+	    0xFF   // FINAL_RANGE HIGH (was 0x48 for VCSEL=14)
+	);
+	
+	// VCSEL periods: Shorter = better close range, Longer = better far range
+	// Status 11 (Min Range Fail) occurs when object is too close for long VCSEL
+	// Changed to 12/8 to allow measurements from ~20mm to 300mm+
+	// These calls trigger phase calibration using the relaxed limits set above
+	setVcselPulsePeriod(VcselPeriodPreRange, 12);  // Minimum for close range
+	setVcselPulsePeriod(VcselPeriodFinalRange, 8); // Minimum for close range
+
+	
+	// Increase timing budget to 200ms for MAXIMUM stability and SNR
+	// Longer budget = more averaging = better signal quality = Status 0 instead of 6/11
+	setMeasurementTimingBudget(200000); // 200ms for best quality
+	setTimeout(220); // Timeout > timing budget
+ 
+
 	// Start continuous mode
 	startContinuous(0);
-	
-	HAL_UART_Transmit(&huart3, (uint8_t*)"VL53L0X Ready! Sending data...\r\n", 32, 100);
 
-  /* USER CODE END 2 */
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
+
+	HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Ready! Sending data...\r\n", 32, 100);
+
+	// Start Rx Interrupt
+	HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
+
+	/* USER CODE END 2 */
+
+	/* Infinite loop */
+	/* USER CODE BEGIN WHILE */
 	uint32_t loop_counter = 0;
-	
-	// Inicjalizacja filtra Adaptive EMA
-	AdaptiveEMA_t ema_filter;
-	// min_alpha=0.03 (wygładzanie), max_alpha=0.6 (szybka reakcja), threshold=20.0 (próg błędu mm)
-	AdaptiveEMA_Init(&ema_filter, 0.03f, 0.6f, 20.0f);
-	
+
+	// Inicjalizacja filtra 1-Euro (zamiast Adaptive EMA)
+	// min_cutoff = 1.0 Hz (szum przy postoju)
+	// beta = 0.007 (szybkosc reakcji - wieksze = szybciej, ale wiecej szumu)
+	// d_cutoff = 1.0 Hz (filtr pochodnej)
+	OneEuroFilter_t one_euro;
+	OneEuro_Init(&one_euro, 1.0f, 0.007f, 1.0f);
+
+	// Inicjalizacja filtra medianowego
+	MedianFilter_t median_filter;
+	MedianFilter_Init(&median_filter);
+
+	// Inicjalizacja PID
+	ServoPID_Controller pid;
+	ServoPID_Init(&pid);
+
+    float prev_valid_dist = 0.0f;
+    int invalid_count = 0;
+
 	while (1) {
+		// --- Handle Incoming Commands ---
+		if (cmd_received) {
+			// Debug Echo
+            // char debug_msg[64];
+            // sprintf(debug_msg, "RX_DEBUG:%s\r\n", rx_buffer);
+            // HAL_UART_Transmit(&huart3, (uint8_t*)debug_msg, strlen(debug_msg), 10);
+
+			if (rx_buffer[0] == 'S' && rx_buffer[1] == ':') {
+				g_setpoint = atof((char*)&rx_buffer[2]);
+				// Limit setpoint
+				if (g_setpoint < 0.0f) g_setpoint = 0.0f;
+				if (g_setpoint > 290.0f) g_setpoint = 290.0f;
+			} 
+			// Example for PID: P:0.1 or I:0.01 or D:0.5
+			else if (rx_buffer[0] == 'P' && rx_buffer[1] == ':') g_Kp = atof((char*)&rx_buffer[2]); 
+			else if (rx_buffer[0] == 'I' && rx_buffer[1] == ':') g_Ki = atof((char*)&rx_buffer[2]); 
+			else if (rx_buffer[0] == 'D' && rx_buffer[1] == ':') g_Kd = atof((char*)&rx_buffer[2]);
+			
+			cmd_received = 0;
+		}
+
 		// Miganie LED na początku pętli (co 20 iteracji dla lepszej widoczności przy szybszej pętli)
 		if (loop_counter % 20 == 0) {
 			HAL_GPIO_TogglePin(GPIOB, LD2_Pin);
 		}
-		
+
 		// Odczyt dystansu w trybie continuous (szybki)
-		distance = readRangeContinuousMillimeters(&distanceStr);
+		uint16_t new_distance = readRangeContinuousMillimeters(&distanceStr);
 		
-		if (distance != 0xFFFF && distance < 8190) {
-			// Korekta na promień kulki
-			distance += BALL_RADIUS;
-			
-			// Kalibracja liniowa
-			float dist_calibrated = ((float)distance - 80.0f) * 1.26f;
-			if (dist_calibrated < 0.0f) dist_calibrated = 0.0f;
-			if (dist_calibrated > 300.0f) dist_calibrated = 300.0f;
-			distance = (uint16_t)dist_calibrated;
-			
-			// Filtracja EMA
-			float filtered_dist = AdaptiveEMA_Filter(&ema_filter, (float)distance);
-			
-			// Wysyłanie w formacie z CRC
-			float current_servo_angle = SERVO_CENTER; // Na razie stała wartość
-			float current_error = g_setpoint - filtered_dist;
-			
-			char data_buffer[64];
-			int len = sprintf(data_buffer, "D:%d;A:%d;F:%d;E:%d", 
-				distance, (int)current_servo_angle, (int)filtered_dist, (int)current_error);
-			uint8_t out_crc = CalculateCRC8(data_buffer, len);
-			
-			sprintf(msg, "%s;C:%02X\r\n", data_buffer, out_crc);
-			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 10); // Timeout 10ms zamiast 100ms!
+		// CRITICAL: Only process and send UART when we have a NEW sample
+		// Sensor timing budget is 200ms, so new samples arrive every ~200ms
+		// Skip processing if this is the same sample as before
+		static uint16_t last_raw_distance = 0;
+		if (new_distance == last_raw_distance && new_distance != 8190 && new_distance != 8191) {
+		    // Same sample as before, skip this iteration
+		    HAL_Delay(10); // Small delay to avoid busy-waiting
+		    continue;
+		}
+		last_raw_distance = new_distance;
+		distance = new_distance;
+
+        // --- FILTER 0: Sensor Status Check ---
+
+        // Status 0 = Good, Status 11 = Min Range (but often false positive)
+        // Accept Status 11 if distance is valid (not 8190/8191 = out of range)
+        if (distanceStr.rangeStatus != 0 && distanceStr.rangeStatus != 11) {
+             // Invalid measurement (e.g. sigma fail, signal fail). Keep last valid or skip.
+             distance = (uint16_t)prev_valid_dist; // Use last known
+        } else if (distanceStr.rangeStatus == 11 && distance >= 8190) {
+             // Status 11 with out-of-range distance = truly invalid
+             distance = (uint16_t)prev_valid_dist;
+        }
+        // If Status 0 or Status 11 with valid distance (<8190), proceed normally
+ 
+
+		// 1. Filtracja Medianowa (usuwanie szpilek z surowego odczytu)
+		// Rzutowanie na float dla zachowania precyzji w medianie
+		float dist_median = MedianFilter_Apply(&median_filter, (float) distance);
+
+        // --- FILTER 1: Jump Rejection (Spike Filter) ---
+        // If jump > 100mm in one step (unlikely for a ball), ignore unless it persists.
+        if (loop_counter > 10) { // Allow startup
+             float jump = dist_median - prev_valid_dist;
+             if (jump < 0) jump = -jump;
+             
+             if (jump > 50.0f && distanceStr.rangeStatus == 0) { // 5cm jump strict limit
+                  if (invalid_count < 5) {
+                      dist_median = prev_valid_dist; // Ignore this sample, use previous
+                      invalid_count++;
+                  } else {
+                      // Persisted long enough, accept it (maybe moved fast)
+                      invalid_count = 0;
+                      prev_valid_dist = dist_median;
+                  }
+             } else {
+                 if (distanceStr.rangeStatus == 0) {
+                    prev_valid_dist = dist_median;
+                    invalid_count = 0;
+                 }
+             }
+        } else {
+             prev_valid_dist = dist_median;
+        }
+
+
+		// 2. Kalibracja: Raw sensor → Position on beam
+		// FINAL calibration based on actual measurements:
+		// dist_median at start: 50mm → position 0mm
+		// dist_median at end: 240mm → position 290mm
+		// Sensor range: 190mm (240-50)
+		// Beam length: 290mm
+		// Scaling: 290/190 = 1.5263
+		
+		float position_on_beam = (dist_median - 50.0f) * 1.5263f;
+		
+		// Clamp to beam length 0-290mm
+		if (position_on_beam < 0.0f) position_on_beam = 0.0f;
+		if (position_on_beam > 290.0f) position_on_beam = 290.0f;
+		
+		float dist_calibrated = position_on_beam;
+
+
+
+
+
+
+
+
+
+		// 3. Filtracja 1-Euro (wygładzanie skalibrowanego sygnału)
+		float filtered_dist = OneEuro_Update(&one_euro, dist_calibrated, HAL_GetTick());
+
+		// Update zmiennej display (chcemy widzieć skalibrowany dystans jako "Raw" w GUI, czy surowy?)
+		// GUI wyświetla "D:xxx" jako Raw. Żeby widzieć poprawność kalibracji, wyślijmy skalibrowany.
+		distance = (uint16_t) dist_calibrated;
+
+
+
+		// Wysyłanie w formacie z CRC
+		float current_error = g_setpoint - filtered_dist;
+
+		// DEAD ZONE: Prevent servo buzzing from micro-adjustments
+		// If error is small (<5mm), don't move servo at all
+		// This prevents continuous small movements that cause servo to "buzz"
+		float dead_zone = 5.0f; // mm
+		if (current_error > -dead_zone && current_error < dead_zone) {
+		    current_error = 0.0f; // Treat as "good enough"
+		}
+
+		// --- PID Control Loop ---
+
+		// Compute PID Output
+		float pid_angle = ServoPID_Compute(&pid, current_error);
+		
+		// RATE LIMITER: Servo can't change angle instantly
+		// Limit max change per iteration to prevent servo lag
+		static float prev_servo_angle = SERVO_CENTER;
+		float max_angle_change = 3.0f; // Max 3 degrees per iteration (~200ms)
+		
+		float angle_diff = pid_angle - prev_servo_angle;
+		if (angle_diff > max_angle_change) {
+		    pid_angle = prev_servo_angle + max_angle_change;
+		} else if (angle_diff < -max_angle_change) {
+		    pid_angle = prev_servo_angle - max_angle_change;
 		}
 		
-		loop_counter++;
+		// Clamp Servo Angle (Safety Limits 65 - 135)
+		if (pid_angle < SERVO_MIN_LIMIT) pid_angle = SERVO_MIN_LIMIT;
+		if (pid_angle > SERVO_MAX_LIMIT) pid_angle = SERVO_MAX_LIMIT;
 		
-    /* USER CODE END WHILE */
+		// CRITICAL: Update prev_servo_angle AFTER clamping
+		// This ensures rate limiter knows actual servo position
+		prev_servo_angle = pid_angle;
+		
+		// SMOOTHING: Moving average to prevent micro-oscillations (buzzing)
+		// Average last 3 servo commands to filter out 1-2° jitter
+		static float servo_history[3] = {SERVO_CENTER, SERVO_CENTER, SERVO_CENTER};
+		static uint8_t servo_idx = 0;
+		
+		servo_history[servo_idx] = pid_angle;
+		servo_idx = (servo_idx + 1) % 3;
+		
+		float smoothed_angle = (servo_history[0] + servo_history[1] + servo_history[2]) / 3.0f;
+		
+		// Actuate Servo with smoothed value
+		SetServoAngle(smoothed_angle); 
+ 
 
-    /* USER CODE BEGIN 3 */
+		char data_buffer[64];
+		// Dodano S:%d do debugowania statusu
+		int len = sprintf(data_buffer, "D:%d;A:%d;F:%d;E:%d;S:%d", distance, (int) pid_angle, (int) filtered_dist,
+				(int) current_error, distanceStr.rangeStatus);
+		uint8_t out_crc = CalculateCRC8(data_buffer, len);
+
+		sprintf(msg, "%s;C:%02X\r\n", data_buffer, out_crc);
+		HAL_UART_Transmit(&huart3, (uint8_t*) msg, strlen(msg), 10); // Timeout 10ms zamiast 100ms!
 	}
-  /* USER CODE END 3 */
+
+
+
+	loop_counter++;
+
+	/* USER CODE END WHILE */
+
+	/* USER CODE BEGIN 3 */
+}
+/* USER CODE END 3 */
+
+/**
+ * @brief System Clock Configuration
+ * @retval None
+ */
+void SystemClock_Config(void) {
+	RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
+	RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
+
+	/** Configure LSE Drive Capability
+	 */
+	HAL_PWR_EnableBkUpAccess();
+
+	/** Configure the main internal regulator output voltage
+	 */
+	__HAL_RCC_PWR_CLK_ENABLE();
+	__HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+
+	/** Initializes the RCC Oscillators according to the specified parameters
+	 * in the RCC_OscInitTypeDef structure.
+	 */
+	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+	RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
+	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+	RCC_OscInitStruct.PLL.PLLM = 4;
+	RCC_OscInitStruct.PLL.PLLN = 96;
+	RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+	RCC_OscInitStruct.PLL.PLLQ = 4;
+	RCC_OscInitStruct.PLL.PLLR = 2;
+	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+		Error_Handler();
+	}
+
+	/** Activate the Over-Drive mode
+	 */
+	if (HAL_PWREx_EnableOverDrive() != HAL_OK) {
+		Error_Handler();
+	}
+
+	/** Initializes the CPU, AHB and APB buses clocks
+	 */
+	RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+	RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+	RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+	RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK) {
+		Error_Handler();
+	}
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+ * @brief ETH Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_ETH_Init(void) {
 
-  /** Configure LSE Drive Capability
-  */
-  HAL_PWR_EnableBkUpAccess();
+	/* USER CODE BEGIN ETH_Init 0 */
 
-  /** Configure the main internal regulator output voltage
-  */
-  __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+	/* USER CODE END ETH_Init 0 */
 
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 4;
-  RCC_OscInitStruct.PLL.PLLN = 96;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 4;
-  RCC_OscInitStruct.PLL.PLLR = 2;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
+	static uint8_t MACAddr[6];
 
-  /** Activate the Over-Drive mode
-  */
-  if (HAL_PWREx_EnableOverDrive() != HAL_OK)
-  {
-    Error_Handler();
-  }
+	/* USER CODE BEGIN ETH_Init 1 */
 
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+	/* USER CODE END ETH_Init 1 */
+	heth.Instance = ETH;
+	MACAddr[0] = 0x00;
+	MACAddr[1] = 0x80;
+	MACAddr[2] = 0xE1;
+	MACAddr[3] = 0x00;
+	MACAddr[4] = 0x00;
+	MACAddr[5] = 0x00;
+	heth.Init.MACAddr = &MACAddr[0];
+	heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
+	heth.Init.TxDesc = DMATxDscrTab;
+	heth.Init.RxDesc = DMARxDscrTab;
+	heth.Init.RxBuffLen = 1524;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-}
+	/* USER CODE BEGIN MACADDRESS */
 
-/**
-  * @brief ETH Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ETH_Init(void)
-{
+	/* USER CODE END MACADDRESS */
 
-  /* USER CODE BEGIN ETH_Init 0 */
+	if (HAL_ETH_Init(&heth) != HAL_OK) {
+		Error_Handler();
+	}
 
-  /* USER CODE END ETH_Init 0 */
+	memset(&TxConfig, 0, sizeof(ETH_TxPacketConfig));
+	TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
+	TxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
+	TxConfig.CRCPadCtrl = ETH_CRC_PAD_INSERT;
+	/* USER CODE BEGIN ETH_Init 2 */
 
-   static uint8_t MACAddr[6];
-
-  /* USER CODE BEGIN ETH_Init 1 */
-
-  /* USER CODE END ETH_Init 1 */
-  heth.Instance = ETH;
-  MACAddr[0] = 0x00;
-  MACAddr[1] = 0x80;
-  MACAddr[2] = 0xE1;
-  MACAddr[3] = 0x00;
-  MACAddr[4] = 0x00;
-  MACAddr[5] = 0x00;
-  heth.Init.MACAddr = &MACAddr[0];
-  heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
-  heth.Init.TxDesc = DMATxDscrTab;
-  heth.Init.RxDesc = DMARxDscrTab;
-  heth.Init.RxBuffLen = 1524;
-
-  /* USER CODE BEGIN MACADDRESS */
-
-  /* USER CODE END MACADDRESS */
-
-  if (HAL_ETH_Init(&heth) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  memset(&TxConfig, 0 , sizeof(ETH_TxPacketConfig));
-  TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
-  TxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
-  TxConfig.CRCPadCtrl = ETH_CRC_PAD_INSERT;
-  /* USER CODE BEGIN ETH_Init 2 */
-
-  /* USER CODE END ETH_Init 2 */
-
-}
-
-/**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C1_Init(void)
-{
-
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x20303E5D;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Analogue filter
-  */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Digital filter
-  */
-  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2C1_Init 2 */
-
-  /* USER CODE END I2C1_Init 2 */
+	/* USER CODE END ETH_Init 2 */
 
 }
 
 /**
-  * @brief TIM3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM3_Init(void)
-{
+ * @brief I2C1 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_I2C1_Init(void) {
 
-  /* USER CODE BEGIN TIM3_Init 0 */
+	/* USER CODE BEGIN I2C1_Init 0 */
 
-  /* USER CODE END TIM3_Init 0 */
+	/* USER CODE END I2C1_Init 0 */
 
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
+	/* USER CODE BEGIN I2C1_Init 1 */
 
-  /* USER CODE BEGIN TIM3_Init 1 */
+	/* USER CODE END I2C1_Init 1 */
+	hi2c1.Instance = I2C1;
+	hi2c1.Init.Timing = 0x20303E5D;
+	hi2c1.Init.OwnAddress1 = 0;
+	hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+	hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+	hi2c1.Init.OwnAddress2 = 0;
+	hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+	hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+	hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+	if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
+		Error_Handler();
+	}
 
-  /* USER CODE END TIM3_Init 1 */
-  htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 95;
-  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 19999;
-  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM3_Init 2 */
+	/** Configure Analogue filter
+	 */
+	if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK) {
+		Error_Handler();
+	}
 
-  /* USER CODE END TIM3_Init 2 */
-  HAL_TIM_MspPostInit(&htim3);
+	/** Configure Digital filter
+	 */
+	if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN I2C1_Init 2 */
+
+	/* USER CODE END I2C1_Init 2 */
 
 }
 
 /**
-  * @brief USART3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART3_UART_Init(void)
-{
+ * @brief TIM3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM3_Init(void) {
 
-  /* USER CODE BEGIN USART3_Init 0 */
+	/* USER CODE BEGIN TIM3_Init 0 */
 
-  /* USER CODE END USART3_Init 0 */
+	/* USER CODE END TIM3_Init 0 */
 
-  /* USER CODE BEGIN USART3_Init 1 */
+	TIM_ClockConfigTypeDef sClockSourceConfig = { 0 };
+	TIM_MasterConfigTypeDef sMasterConfig = { 0 };
+	TIM_OC_InitTypeDef sConfigOC = { 0 };
 
-  /* USER CODE END USART3_Init 1 */
-  huart3.Instance = USART3;
-  huart3.Init.BaudRate = 115200;
-  huart3.Init.WordLength = UART_WORDLENGTH_8B;
-  huart3.Init.StopBits = UART_STOPBITS_1;
-  huart3.Init.Parity = UART_PARITY_NONE;
-  huart3.Init.Mode = UART_MODE_TX_RX;
-  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART3_Init 2 */
+	/* USER CODE BEGIN TIM3_Init 1 */
 
-  /* USER CODE END USART3_Init 2 */
+	/* USER CODE END TIM3_Init 1 */
+	htim3.Instance = TIM3;
+	htim3.Init.Prescaler = 95;
+	htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+	htim3.Init.Period = 19999;
+	htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+	htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+	if (HAL_TIM_Base_Init(&htim3) != HAL_OK) {
+		Error_Handler();
+	}
+	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+	if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK) {
+		Error_Handler();
+	}
+	if (HAL_TIM_PWM_Init(&htim3) != HAL_OK) {
+		Error_Handler();
+	}
+	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+	if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK) {
+		Error_Handler();
+	}
+	sConfigOC.OCMode = TIM_OCMODE_PWM1;
+	sConfigOC.Pulse = 0;
+	sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+	sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+	if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN TIM3_Init 2 */
 
-}
-
-/**
-  * @brief USB_OTG_FS Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USB_OTG_FS_PCD_Init(void)
-{
-
-  /* USER CODE BEGIN USB_OTG_FS_Init 0 */
-
-  /* USER CODE END USB_OTG_FS_Init 0 */
-
-  /* USER CODE BEGIN USB_OTG_FS_Init 1 */
-
-  /* USER CODE END USB_OTG_FS_Init 1 */
-  hpcd_USB_OTG_FS.Instance = USB_OTG_FS;
-  hpcd_USB_OTG_FS.Init.dev_endpoints = 6;
-  hpcd_USB_OTG_FS.Init.speed = PCD_SPEED_FULL;
-  hpcd_USB_OTG_FS.Init.dma_enable = DISABLE;
-  hpcd_USB_OTG_FS.Init.phy_itface = PCD_PHY_EMBEDDED;
-  hpcd_USB_OTG_FS.Init.Sof_enable = ENABLE;
-  hpcd_USB_OTG_FS.Init.low_power_enable = DISABLE;
-  hpcd_USB_OTG_FS.Init.lpm_enable = DISABLE;
-  hpcd_USB_OTG_FS.Init.vbus_sensing_enable = ENABLE;
-  hpcd_USB_OTG_FS.Init.use_dedicated_ep1 = DISABLE;
-  if (HAL_PCD_Init(&hpcd_USB_OTG_FS) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USB_OTG_FS_Init 2 */
-
-  /* USER CODE END USB_OTG_FS_Init 2 */
+	/* USER CODE END TIM3_Init 2 */
+	HAL_TIM_MspPostInit(&htim3);
 
 }
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
+ * @brief USART3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_USART3_UART_Init(void) {
 
-  /* USER CODE END MX_GPIO_Init_1 */
+	/* USER CODE BEGIN USART3_Init 0 */
 
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOG_CLK_ENABLE();
+	/* USER CODE END USART3_Init 0 */
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, LD1_Pin|LD3_Pin|LD2_Pin, GPIO_PIN_RESET);
+	/* USER CODE BEGIN USART3_Init 1 */
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(USB_PowerSwitchOn_GPIO_Port, USB_PowerSwitchOn_Pin, GPIO_PIN_RESET);
+	/* USER CODE END USART3_Init 1 */
+	huart3.Instance = USART3;
+	huart3.Init.BaudRate = 115200;
+	huart3.Init.WordLength = UART_WORDLENGTH_8B;
+	huart3.Init.StopBits = UART_STOPBITS_1;
+	huart3.Init.Parity = UART_PARITY_NONE;
+	huart3.Init.Mode = UART_MODE_TX_RX;
+	huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+	huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+	huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+	huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+	if (HAL_UART_Init(&huart3) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN USART3_Init 2 */
 
-  /*Configure GPIO pin : USER_Btn_Pin */
-  GPIO_InitStruct.Pin = USER_Btn_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(USER_Btn_GPIO_Port, &GPIO_InitStruct);
+	/* USER CODE END USART3_Init 2 */
 
-  /*Configure GPIO pins : LD1_Pin LD3_Pin LD2_Pin */
-  GPIO_InitStruct.Pin = LD1_Pin|LD3_Pin|LD2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+}
 
-  /*Configure GPIO pin : USB_PowerSwitchOn_Pin */
-  GPIO_InitStruct.Pin = USB_PowerSwitchOn_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(USB_PowerSwitchOn_GPIO_Port, &GPIO_InitStruct);
+/**
+ * @brief USB_OTG_FS Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_USB_OTG_FS_PCD_Init(void) {
 
-  /*Configure GPIO pin : USB_OverCurrent_Pin */
-  GPIO_InitStruct.Pin = USB_OverCurrent_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(USB_OverCurrent_GPIO_Port, &GPIO_InitStruct);
+	/* USER CODE BEGIN USB_OTG_FS_Init 0 */
 
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
+	/* USER CODE END USB_OTG_FS_Init 0 */
 
-  /* USER CODE END MX_GPIO_Init_2 */
+	/* USER CODE BEGIN USB_OTG_FS_Init 1 */
+
+	/* USER CODE END USB_OTG_FS_Init 1 */
+	hpcd_USB_OTG_FS.Instance = USB_OTG_FS;
+	hpcd_USB_OTG_FS.Init.dev_endpoints = 6;
+	hpcd_USB_OTG_FS.Init.speed = PCD_SPEED_FULL;
+	hpcd_USB_OTG_FS.Init.dma_enable = DISABLE;
+	hpcd_USB_OTG_FS.Init.phy_itface = PCD_PHY_EMBEDDED;
+	hpcd_USB_OTG_FS.Init.Sof_enable = ENABLE;
+	hpcd_USB_OTG_FS.Init.low_power_enable = DISABLE;
+	hpcd_USB_OTG_FS.Init.lpm_enable = DISABLE;
+	hpcd_USB_OTG_FS.Init.vbus_sensing_enable = ENABLE;
+	hpcd_USB_OTG_FS.Init.use_dedicated_ep1 = DISABLE;
+	if (HAL_PCD_Init(&hpcd_USB_OTG_FS) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN USB_OTG_FS_Init 2 */
+
+	/* USER CODE END USB_OTG_FS_Init 2 */
+
+}
+
+/**
+ * @brief GPIO Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_GPIO_Init(void) {
+	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+	/* USER CODE BEGIN MX_GPIO_Init_1 */
+
+	/* USER CODE END MX_GPIO_Init_1 */
+
+	/* GPIO Ports Clock Enable */
+	__HAL_RCC_GPIOC_CLK_ENABLE();
+	__HAL_RCC_GPIOH_CLK_ENABLE();
+	__HAL_RCC_GPIOA_CLK_ENABLE();
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+	__HAL_RCC_GPIOD_CLK_ENABLE();
+	__HAL_RCC_GPIOG_CLK_ENABLE();
+
+	/*Configure GPIO pin Output Level */
+	HAL_GPIO_WritePin(GPIOB, LD1_Pin | LD3_Pin | LD2_Pin, GPIO_PIN_RESET);
+
+	/*Configure GPIO pin Output Level */
+	HAL_GPIO_WritePin(USB_PowerSwitchOn_GPIO_Port, USB_PowerSwitchOn_Pin, GPIO_PIN_RESET);
+
+	/*Configure GPIO pin : USER_Btn_Pin */
+	GPIO_InitStruct.Pin = USER_Btn_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(USER_Btn_GPIO_Port, &GPIO_InitStruct);
+
+	/*Configure GPIO pins : LD1_Pin LD3_Pin LD2_Pin */
+	GPIO_InitStruct.Pin = LD1_Pin | LD3_Pin | LD2_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+	/*Configure GPIO pin : USB_PowerSwitchOn_Pin */
+	GPIO_InitStruct.Pin = USB_PowerSwitchOn_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(USB_PowerSwitchOn_GPIO_Port, &GPIO_InitStruct);
+
+	/*Configure GPIO pin : USB_OverCurrent_Pin */
+	GPIO_InitStruct.Pin = USB_OverCurrent_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(USB_OverCurrent_GPIO_Port, &GPIO_InitStruct);
+
+	/* USER CODE BEGIN MX_GPIO_Init_2 */
+
+	/* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
@@ -626,17 +1010,16 @@ static void MX_GPIO_Init(void)
 /* USER CODE END 4 */
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
-void Error_Handler(void)
-{
-  /* USER CODE BEGIN Error_Handler_Debug */
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
+void Error_Handler(void) {
+	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
 	__disable_irq();
 	while (1) {
 	}
-  /* USER CODE END Error_Handler_Debug */
+	/* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
 /**

@@ -207,6 +207,12 @@ uint16_t getTimeout(void);
 // Indicates whether a read timeout has occurred since the last call to timeoutOccurred().
 bool timeoutOccurred(void);
 
+// Set manual phase calibration limits (relaxed for better stability with difficult targets)
+// This can help resolve Phase Fail (Status 4) errors by widening the acceptable phase range
+void setPhaseCalibrationLimits(uint8_t pre_range_low, uint8_t pre_range_high,
+                                uint8_t final_range_low, uint8_t final_range_high);
+
+
 //---------------------------------------------------------
 // I2C communication Functions
 //---------------------------------------------------------
