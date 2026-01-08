@@ -25,66 +25,56 @@
 
 #include "VL53L0X.h"
 #include <stdio.h>
-#include <stdlib.h> // for atof
+#include <stdlib.h>
+#include "filters.h"
+#include "calibration.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-// --- Calibration Point Structure ---
-typedef struct {
-	float raw_val;
-	float actual_pos;
-} CalPoint_t;
 
-// --- Simple EMA Filter for Derivative Smoothing ---
-typedef struct {
-	float alpha;       // Smoothing factor (0-1, smaller = smoother)
-	float filtered_value;
-	uint8_t initialized;
-} EMA_Filter_t;
-
-// --- PID Controller ---
+// --- Parametry PID ---
 typedef struct {
 	float Kp;
 	float Ki;
 	float Kd;
 	float prevError;
 	float integral;
-	float prevMeasurement;  // For Derivative-on-Measurement
-	EMA_Filter_t d_filter;  // Low-pass filter for derivative term
+	float prevMeasurement;  // Do obliczania pochodnej na podstawie pomiaru (Derivative-on-Measurement)
+	EMA_Filter_t d_filter;  // Filtr dolnoprzepustowy dla członu różniczkującego
 } ServoPID_Controller;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// --- Parametry Systemu ---
+//Konfiguracja rampy
 #define SETPOINT_DEFAULT   100.0f
 #define BALL_RADIUS        20
 #define PID_DT_MS          30
 
-// --- Limity Serwa ---
+// Zakres ruchu serwa
 #define SERVO_CENTER       100.0f
 #define SERVO_MIN_LIMIT    70.0f
 #define SERVO_MAX_LIMIT    130.0f
 
-// --- Konfiguracja Sprzętowa Serwa ---
+// Ustawienia sprzętowe Serwa (PWM)
 #define SERVO_MIN_CCR      500
 #define SERVO_MAX_CCR      2500
 #define SERVO_MAX_ANGLE    200
 
-// --- Tryb Testowy ---
-#define SENSOR_TEST_MODE   0  // 1 aby włączyć logowanie surowych danych czujnika
-#define USE_CALIBRATION    1 // 1 aby używać kalibracji wielopunktowej, 0 dla surowych danych
+// Tryby
+#define SENSOR_TEST_MODE   0  // 1: logowanie surowych danych (debugowanie)
+#define USE_CALIBRATION    1  // 1: użyj kalibracji 5-punktowej, 0: surowe dane
 
-// --- Filtry PID ---
-#define D_DEADBAND         0.5f   // mm - zmniejszone z 3.0 dla szybszej reakcji
-#define D_FILTER_ALPHA     0.25f  // EMA alpha dla składowej D
+// Ustawienia PID i Filtracji
+#define D_DEADBAND         0.5f   // mm - strefa nieczułości dla członu D
+#define D_FILTER_ALPHA     0.25f  // Wygładzanie dla członu D (0.0 - 1.0)
 
-// --- Servo Deadband (Anti-Buzzing) ---
-#define SERVO_ANGLE_DEADBAND  0.0f  // DISABLED - natychmiastowa reakcja
-#define SERVO_SMOOTHING_SIZE  5     // zmniejszone z 7 dla mniejszego lag
+// Wygładzanie Serwa
+#define SERVO_ANGLE_DEADBAND  0.0f // Wyłączona strefa nieczułości serwa
+#define SERVO_SMOOTHING_SIZE  5    // Ilość próbek do wygładzania ruchu
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -126,44 +116,29 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 uint16_t distance;
 char msg[64];
 
-// Zmienne do odbioru UART
+// Zmienne obsługi UART
 uint8_t rx_byte;
 uint8_t rx_buffer[64];
 volatile uint8_t rx_idx = 0;
 volatile uint8_t cmd_received = 0;
 
-// Zmienne Globalne Sterowania
-// Ball position range: 0-290mm (0 = ball at start, 290 = ball at end)
-volatile float g_setpoint = 145.0f; // Middle of beam (290/2)
-volatile float g_Kp = -0.15f;  // Zwiększone z -0.29 - bardziej agresywna reakcja
-volatile float g_Ki = -0.0025f;
-volatile float g_Kd = -6.0f;  // Zwiększone z -1.2 - silniejsza antycypacja przyspieszenia
+// Główne zmienne sterujące
+// Pozycja piłki: 0 mm (start) - 290 mm (koniec)
+volatile float g_setpoint = 145.0f; // Domyślnie środek belki
+volatile float g_Kp = -0.15f;       // Wzmocnienie proporcjonalne
+volatile float g_Ki = -0.0025f;     // Wzmocnienie całkujące
+volatile float g_Kd = -6.0f;        // Wzmocnienie różniczkujące
 
-// --- Auto-Calibration Variables ---
-volatile uint8_t calibration_mode = 0;  // 0 = normal, 1 = calibrating
-volatile float cal_raw_min = 9999.0f;   // Minimum raw sensor value during calibration
-volatile float cal_raw_max = 0.0f;      // Maximum raw sensor value during calibration
-volatile uint32_t cal_start_time = 0;   // Timestamp when calibration started
+// Zmienne kalibracji
+volatile uint8_t calibration_mode = 0;
+volatile float cal_raw_min = 9999.0f;
+volatile float cal_raw_max = 0.0f;
+volatile uint32_t cal_start_time = 0;
 
-// Current calibration values (defaults, will be updated by auto-cal)
-volatile float sensor_min = 50.0f;      // Raw sensor value at beam START (0mm)
-volatile float sensor_max = 220.0f;     // Raw sensor value at beam END (290mm)
-volatile float sensor_middle = 115.0f;  // Raw sensor value at beam MIDDLE
-
-// --- 5-Point Calibration Table ---
-// Maps RAW sensor reading (x) to ACTUAL beam position in mm (y)
-CalPoint_t cal_table[5] = {
-	{ 50.0f,   0.0f },   // Punkt 0: Początek belki
-	{ 90.0f,   75.0f },  // Punkt 1: 25%
-	{ 175.0f,  150.0f }, // Punkt 2: Środek (50%)
-	{ 270.0f,  225.0f }, // Punkt 3: 75%
-	{ 310.0f,  290.0f }  // Punkt 4: Koniec (100%)
-};
-
-// --- Calibration State Management ---
-volatile uint8_t calibration_ready = 0;  // 0 = waiting for calibration, 1 = ready to run
-volatile uint8_t cal_points_received = 0; // Bitmask: bit 0-4 for points 0-4
-
+// Domyślne punkty kalibracyjne 
+volatile float sensor_min = 50.0f;
+volatile float sensor_max = 220.0f;
+volatile float sensor_middle = 115.0f;
 
 /* USER CODE END PV */
 
@@ -176,37 +151,17 @@ static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
-// --- Adaptive EMA Struct ---
-typedef struct {
-	float min_alpha;
-	float max_alpha;
-	float threshold;
-	float value;
-	uint8_t first_run;
-} AdaptiveEMA_t;
 
-void AdaptiveEMA_Init(AdaptiveEMA_t *ema, float min_alpha, float max_alpha, float threshold);
-float AdaptiveEMA_Filter(AdaptiveEMA_t *ema, float measurement);
-
-void EMA_Init(EMA_Filter_t *ema, float alpha);
-float EMA_Update(EMA_Filter_t *ema, float new_value);
-
-// Calibration function
-float InterpolateDistance(float raw_input);
-
-// Forward declarations
 void SetServoAngle(float angle);
 void ServoPID_Init(ServoPID_Controller *pid);
 float ServoPID_Compute(ServoPID_Controller *pid, float error, float measurement);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART3) {
-		// Simple flow control: if main loop hasn't processed previous command,
-		// don't overwrite buffer. Just discard char or wait.
-		// Better: only write if cmd_received == 0
 		if (cmd_received == 0) {
 			if (rx_byte == '\n' || rx_byte == '\r') {
 				rx_buffer[rx_idx] = '\0';
@@ -221,155 +176,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 		HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
 	}
 }
-// --- Median Filter ---
-#define MEDIAN_WINDOW_SIZE 3  // Minimal lag - only 3 samples for basic spike rejection
-typedef struct {
-	float buffer[MEDIAN_WINDOW_SIZE];
-	uint8_t index;
-	uint8_t count;
-} MedianFilter_t;
 
-void MedianFilter_Init(MedianFilter_t *filter) {
-	filter->index = 0;
-	filter->count = 0;
-	for (int i = 0; i < MEDIAN_WINDOW_SIZE; i++) {
-		filter->buffer[i] = 0.0f;
-	}
-}
-
-float MedianFilter_Apply(MedianFilter_t *filter, float v) {
-	// Insert new value
-	filter->buffer[filter->index] = v;
-	filter->index = (filter->index + 1) % MEDIAN_WINDOW_SIZE;
-	if (filter->count < MEDIAN_WINDOW_SIZE) {
-		filter->count++;
-	}
-
-	// Create a temporary array for sorting
-	float sorted[MEDIAN_WINDOW_SIZE];
-	for (int i = 0; i < filter->count; i++) {
-		sorted[i] = filter->buffer[i];
-	}
-
-	// Simple Bubble Sort (optimized for small size 9)
-	for (int i = 0; i < filter->count - 1; i++) {
-		for (int j = 0; j < filter->count - i - 1; j++) {
-			if (sorted[j] > sorted[j + 1]) {
-				float temp = sorted[j];
-				sorted[j] = sorted[j + 1];
-				sorted[j + 1] = temp;
-			}
-		}
-	}
-
-	// Return median
-	if (filter->count % 2 == 0) {
-		return (sorted[filter->count / 2 - 1] + sorted[filter->count / 2]) / 2.0f;
-	} else {
-		return sorted[filter->count / 2];
-	}
-}
-
-void AdaptiveEMA_Init(AdaptiveEMA_t *ema, float min_alpha, float max_alpha, float threshold) {
-	ema->min_alpha = min_alpha;
-	ema->max_alpha = max_alpha;
-	ema->threshold = threshold;
-	ema->value = 0.0f;
-	ema->first_run = 1;
-}
-
-float AdaptiveEMA_Filter(AdaptiveEMA_t *ema, float measurement) {
-	if (ema->first_run) {
-		ema->value = measurement;
-		ema->first_run = 0;
-		return measurement;
-	}
-	float error = (measurement > ema->value) ? (measurement - ema->value) : (ema->value - measurement);
-	float factor = error / ema->threshold;
-	if (factor > 1.0f)
-		factor = 1.0f;
-	float alpha = ema->min_alpha + (ema->max_alpha - ema->min_alpha) * factor;
-	ema->value = alpha * measurement + (1.0f - alpha) * ema->value;
-	return ema->value;
-}
-
-// --- Simple EMA Filter Implementation ---
-void EMA_Init(EMA_Filter_t *ema, float alpha) {
-	ema->alpha = alpha;
-	ema->filtered_value = 0.0f;
-	ema->initialized = 0;
-}
-
-float EMA_Update(EMA_Filter_t *ema, float new_value) {
-	if (!ema->initialized) {
-		ema->filtered_value = new_value;
-		ema->initialized = 1;
-		return new_value;
-	}
-	ema->filtered_value = ema->alpha * new_value + (1.0f - ema->alpha) * ema->filtered_value;
-	return ema->filtered_value;
-}
-
-
-// --- 1-Euro Filter Implementation ---
-// Based on: http://cristal.univ-lille.fr/~casiez/1euro/
-typedef struct {
-    float min_cutoff; // Minimum cutoff frequency (Hz)
-    float beta;       // Speed coefficient
-    float d_cutoff;   // Cutoff frequency for derivative (Hz)
-    float x_prev;     // Previous value
-    float dx_prev;    // Previous derivative
-    uint32_t t_prev;  // Previous timestamp (ms)
-    int first_run;    // Flag for first run
-} OneEuroFilter_t;
-
-void OneEuro_Init(OneEuroFilter_t *f, float min_cutoff, float beta, float d_cutoff) {
-    f->min_cutoff = min_cutoff;
-    f->beta = beta;
-    f->d_cutoff = d_cutoff;
-    f->x_prev = 0.0f;
-    f->dx_prev = 0.0f;
-    f->t_prev = 0;
-    f->first_run = 1;
-}
-
-float OneEuro_Update(OneEuroFilter_t *f, float x, uint32_t t_now) {
-    if (f->first_run) {
-        f->x_prev = x;
-        f->dx_prev = 0.0f;
-        f->t_prev = t_now;
-        f->first_run = 0;
-        return x;
-    }
-
-    float dt = (t_now - f->t_prev) / 1000.0f; // Convert ms to seconds
-    if (dt <= 0.0f) return f->x_prev; // Zero or negative time diff (shouldn't happen)
-    
-    // 1. Compute derivative (dx)
-    float dx = (x - f->x_prev) / dt;
-
-    // 2. Filter derivative (Low Pass)
-    float rc_d = 1.0f / (2.0f * 3.14159f * f->d_cutoff);
-    float alpha_d = 1.0f / (1.0f + rc_d / dt);
-    float dx_hat = dx * alpha_d + f->dx_prev * (1.0f - alpha_d);
-
-    // 3. Compute dynamic cutoff based on speed
-    float cutoff = f->min_cutoff + f->beta * (dx_hat > 0 ? dx_hat : -dx_hat); // abs(dx)
-
-    // 4. Filter signal (Low Pass with dynamic cutoff)
-    float rc = 1.0f / (2.0f * 3.14159f * cutoff);
-    float alpha = 1.0f / (1.0f + rc / dt);
-    float x_hat = x * alpha + f->x_prev * (1.0f - alpha);
-
-    // Update state
-    f->x_prev = x_hat;
-    f->dx_prev = dx_hat;
-    f->t_prev = t_now;
-
-    return x_hat;
-}
-
-// --- PID Implementation ---
 void ServoPID_Init(ServoPID_Controller *pid) {
 	pid->Kp = 0.0f;
 	pid->Ki = 0.0f;
@@ -377,65 +184,48 @@ void ServoPID_Init(ServoPID_Controller *pid) {
 	pid->prevError = 0.0f;
 	pid->integral = 0.0f;
 	pid->prevMeasurement = 0.0f;
-	EMA_Init(&pid->d_filter, D_FILTER_ALPHA);  // Initialize derivative filter
+	EMA_Init(&pid->d_filter, D_FILTER_ALPHA);
 }
 
 
 
 float ServoPID_Compute(ServoPID_Controller *pid, float error, float measurement) {
-	// Update PID terms from global variables (UART control)
 	pid->Kp = g_Kp;
 	pid->Ki = g_Ki;
 	pid->Kd = g_Kd;
 
-	// === P TERM ===
 	float P = pid->Kp * error;
 
-	// === I TERM (Simple Anti-windup) ===
-	// Only accumulate integral if output is NOT saturated
+	// Całkujemy uchyb tylko jeśli wyjście nie jest nasycone (nie osiągnęło limitów)
 	float tentative_output = SERVO_CENTER + P + (pid->Ki * pid->integral);
 	
-	// Only accumulate if we're not at servo limits
 	if (tentative_output >= (SERVO_MIN_LIMIT + 2.0f) && 
 	    tentative_output <= (SERVO_MAX_LIMIT - 2.0f)) {
 	    pid->integral += error;
 	} else {
-	    // At limits - decay integral slowly to allow recovery
 	    pid->integral *= 0.95f;
 	}
 	
-	// Limit integral to prevent extreme values
 	if (pid->integral > 5000.0f) pid->integral = 5000.0f;
 	if (pid->integral < -5000.0f) pid->integral = -5000.0f;
     
 	float I = pid->Ki * pid->integral;
 
-	// === D TERM - NEW IMPLEMENTATION ===
 	float D = 0.0f;
+
+    float raw_derivative = -(measurement - pid->prevMeasurement);
 	
-	// METHOD 1: Derivative-on-Measurement instead of Derivative-on-Error
-	// This eliminates derivative kick when setpoint changes
-	// and works on filtered signal (smoother than error)
-	// Negative sign because we want to oppose change in measurement
-	float raw_derivative = -(measurement - pid->prevMeasurement);
-	
-	// METHOD 2: Deadband - ignore tiny changes (<D_DEADBAND mm per iteration)
-	// Eliminates D response to sensor noise
 	if (raw_derivative > -D_DEADBAND && raw_derivative < D_DEADBAND) {
 		raw_derivative = 0.0f;
 	}
 	
-	// METHOD 3: Low-pass filter on derivative (EMA with configurable alpha)
-	// Smooths out remaining noise without excessive lag
 	float filtered_derivative = EMA_Update(&pid->d_filter, raw_derivative);
 	
 	D = pid->Kd * filtered_derivative;
 	
-	// Update state for next iteration
 	pid->prevMeasurement = measurement;
 	pid->prevError = error;
 
-	// === FINAL OUTPUT ===
 	float output = SERVO_CENTER + P + I + D;
 	return output;
 }
@@ -445,12 +235,9 @@ float ServoPID_Compute(ServoPID_Controller *pid, float error, float measurement)
 
 
 void SetServoAngle(float angle) {
-	// Mapping: 0 deg -> 500us (2.5%), 180 deg -> 2500us (12.5%)
-	// ARR = 19999 (20ms period)
-	// Pulse = 500 + (angle / 180.0) * 2000
-    // Simplified mapping for typical SG90/MG996R:
-    // 0 deg = ~500 (Compare value)
-    // 180 deg = ~2500 (Compare value)
+	// Sterowanie serwem SG90/MG996R:
+	// 0 stopni = impuls ~500us
+	// 180 stopni  = impuls ~2500us
     
     if (angle < 0.0f) angle = 0.0f;
     if (angle > 180.0f) angle = 180.0f;
@@ -471,29 +258,6 @@ uint8_t CalculateCRC8(const char *data, int len) {
 		}
 	}
 	return crc;
-}
-
-// --- Multi-Point Interpolation Function ---
-float InterpolateDistance(float raw_input) {
-	// Clamp to range
-	if (raw_input <= cal_table[0].raw_val) return cal_table[0].actual_pos;
-	if (raw_input >= cal_table[4].raw_val) return cal_table[4].actual_pos;
-
-	// Find segment
-	for (int i = 0; i < 4; i++) {
-		if (raw_input >= cal_table[i].raw_val && raw_input <= cal_table[i+1].raw_val) {
-			
-			// Linear Interpolation: y = y0 + (x - x0) * (y1 - y0) / (x1 - x0)
-			float range_x = cal_table[i+1].raw_val - cal_table[i].raw_val;
-			float range_y = cal_table[i+1].actual_pos - cal_table[i].actual_pos;
-			
-			if (range_x < 0.1f) return cal_table[i].actual_pos; // Avoid div/0
-			
-			float ratio = (raw_input - cal_table[i].raw_val) / range_x;
-			return cal_table[i].actual_pos + (ratio * range_y);
-		}
-	}
-	return raw_input; // Should not reach here
 }
 
 /* USER CODE END 0 */
@@ -534,46 +298,30 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
-	// Start PWM for Servo (TIM3 Channel 1)
+	// Uruchomienie PWM dla serwa (Timer 3, Kanał 1)
 	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
 	
-	// --- POWER STABILIZATION DELAY ---
-	// Wait 2 seconds to let power supply capaictors charge and voltage stabilize
-	// This helps prevent Brownout Resets on servo startup
+	// Czekamy 2 sekundy, aby kondensatory się naładowały i napięcie ustabilizowało.
 	HAL_UART_Transmit(&huart3, (uint8_t*) "Stabilizing Power...\r\n", 22, 100);
 	HAL_Delay(2000); 
 
-	// --- GENTLE STARTUP ---
 	HAL_UART_Transmit(&huart3, (uint8_t*) "Setting Servo to CENTER\r\n", 25, 100);
-	SetServoAngle(SERVO_CENTER); // Move to 100 deg once
+	SetServoAngle(SERVO_CENTER); // Ustaw serwo na środek (100 stopni)
 	
-	// Optional: Flash Green LED to indicate success (we survived the move)
+	// Test led
 	HAL_GPIO_WritePin(GPIOB, LD1_Pin, GPIO_PIN_SET);
 	HAL_Delay(200);
 	HAL_GPIO_WritePin(GPIOB, LD1_Pin, GPIO_PIN_RESET);
 
-	// Inicjalizacja VL53L0X
+	// Inicjalizacja czujnika odległości VL53L0X
 	statInfo_t_VL53L0X distanceStr;
-	// CRITICAL: Wait for I2C bus and sensor to stabilize
-	// VL53L0X requires ~2ms boot time after power-on, plus I2C settling
-	HAL_Delay(100); // 100ms to ensure sensor is ready
+	HAL_Delay(100); 
 
-	// === SOFT RESET SENSOR BEFORE INIT ===
-	// Force sensor to reload tuning settings from NVM
-	// This fixes Status 4/6/11 errors caused by corrupted state
 	HAL_UART_Transmit(&huart3, (uint8_t*) "Resetting VL53L0X...\r\n", 21, 100);
 	
-	// Method 1: Power cycle via GPIO (if XSHUT pin connected)
-	// HAL_GPIO_WritePin(VL53L0X_XSHUT_GPIO_Port, VL53L0X_XSHUT_Pin, GPIO_PIN_RESET);
-	// HAL_Delay(10);
-	// HAL_GPIO_WritePin(VL53L0X_XSHUT_GPIO_Port, VL53L0X_XSHUT_Pin, GPIO_PIN_SET);
-	// HAL_Delay(10);
-	
-	// Method 2: I2C Soft Reset (always works)
-	// Note: This might fail if sensor is in bad state - that's OK
 	uint8_t reset_val = 0x00;
 	HAL_I2C_Mem_Write(&hi2c1, ADDRESS_DEFAULT, 0x00BF, 1, &reset_val, 1, 100);
-	HAL_Delay(50); // Wait for reset to complete
+	HAL_Delay(50); // Czas na reset
 	
 	HAL_UART_Transmit(&huart3, (uint8_t*) "Initializing VL53L0X...\r\n", 25, 100);
 	if (!initVL53L0X(1, &hi2c1)) {
@@ -582,21 +330,12 @@ int main(void)
 		HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init Success!\r\n", 23, 100);
 	}
 
-	// === USE DEFAULT CONFIGURATION ===
-	// No custom VCSEL, timing budget, or signal rate settings
-	// Let the library use factory defaults which are:
-	// - VCSEL: 14/10 (pre/final)
-	// - Timing Budget: ~33ms
-	// - Signal Rate: 0.25 MCPS
-	
-	// Start continuous mode with default settings
-	startContinuous(0);
+    startContinuous(0);
 
 
 
 	HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Ready! Sending data...\r\n", 32, 100);
 
-	// Start Rx Interrupt
 	HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
 
   /* USER CODE END 2 */
@@ -605,60 +344,54 @@ int main(void)
   /* USER CODE BEGIN WHILE */
 	uint32_t loop_counter = 0;
 
-	// Inicjalizacja filtra 1-Euro
+	// Inicjalizacja filtrów
 	OneEuroFilter_t one_euro;
-	OneEuro_Init(&one_euro, 2.0f, 0.001f, 1.0f);  // Aggressive filtering: fast response, minimal lag
+	OneEuro_Init(&one_euro, 2.0f, 0.001f, 1.0f);
 
-	// Inicjalizacja filtra medianowego
 	MedianFilter_t median_filter;
 	MedianFilter_Init(&median_filter);
 
-	// Inicjalizacja PID
+	// Inicjalizacja kontrolera PID
 	ServoPID_Controller pid;
 	ServoPID_Init(&pid);
 
-    // Startup with safe value
+    // Zmienne pomocnicze do walidacji odczytów
     float prev_valid_dist = 145.0f; 
     int invalid_count = 0;
 
 	while (1) {
 		loop_counter++;
 
-		// --- Handle Incoming Commands ---
+		// Obsługa komend UART
 		if (cmd_received) {
 			if (rx_buffer[0] == 'S' && rx_buffer[1] == ':') {
-				g_setpoint = atof((char*)&rx_buffer[2]);
+				g_setpoint = atof((char*)&rx_buffer[2]); // S:Setpoint
 				if (g_setpoint < 0.0f) g_setpoint = 0.0f;
 				if (g_setpoint > 290.0f) g_setpoint = 290.0f;
 			} 
 			else if (rx_buffer[0] == 'P' && rx_buffer[1] == ':') g_Kp = atof((char*)&rx_buffer[2]); 
 			else if (rx_buffer[0] == 'I' && rx_buffer[1] == ':') g_Ki = atof((char*)&rx_buffer[2]); 
 			else if (rx_buffer[0] == 'D' && rx_buffer[1] == ':') g_Kd = atof((char*)&rx_buffer[2]);
-			// --- CALIBRATION COMMANDS ---
-			// Format: "CAL0:50.0,0.0" = Set cal_table[0] = {50.0f, 0.0f}
+			// Komendy Kalibracji
+			// Format: "CAL0:50.0,0.0" -> Punkt 0: Surowy=50.0, Rzeczywisty=0.0
 			else if (rx_buffer[0] == 'C' && rx_buffer[1] == 'A' && rx_buffer[2] == 'L') {
-				int cal_idx = rx_buffer[3] - '0'; // '0'-'4' -> 0-4
+				int cal_idx = rx_buffer[3] - '0'; // Indeks punktu
 				if (cal_idx >= 0 && cal_idx < 5) {
-					// Parse "CAL0:50.0,0.0"
 					char *comma = strchr((char*)&rx_buffer[5], ',');
 					if (comma != NULL) {
-						*comma = '\0'; // Split string
+						*comma = '\0';
 						float raw_val = atof((char*)&rx_buffer[5]);
 						float actual_val = atof(comma + 1);
 						
-						cal_table[cal_idx].raw_val = raw_val;
-						cal_table[cal_idx].actual_pos = actual_val;
+						// Aktualizacja w bibliotece kalibracyjnej
+						Calibration_UpdatePoint(cal_idx, raw_val, actual_val);
 						
-						// Mark point as received
-						cal_points_received |= (1 << cal_idx);
-						
-						// Check if all 5 points received (bits 0-4 set = 0b11111 = 31)
-						if (cal_points_received == 0x1F) {
-							calibration_ready = 1;
+						// Sprawdzenie czy mamy komplet punktów
+						if (Calibration_IsReady()) {
 							sprintf(msg, "[CAL] ✅ All points received! System READY!\r\n");
 							HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
 						} else {
-							// Confirm individual point (Use integer math for safety)
+							// Potwierdzenie przyjęcia punktu
 							int r_i = (int)raw_val;
 							int r_d = (int)((raw_val - r_i) * 10);
 							int a_i = (int)actual_val;
@@ -666,7 +399,7 @@ int main(void)
 							
 							sprintf(msg, "[CAL] Point %d: RAW=%d.%d -> POS=%d.%d (%d/5)\r\n", 
 							        cal_idx, r_i, abs(r_d), a_i, abs(a_d), 
-							        __builtin_popcount(cal_points_received));
+							        __builtin_popcount(Calibration_GetReceivedPointsMask()));
 							HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
 						}
 					}
@@ -676,14 +409,9 @@ int main(void)
 			cmd_received = 0;
 		}
 
-		// --- READ SENSOR (Always, even during calibration) ---
 		// Odczyt dystansu w trybie continuous
 		distance = readRangeContinuousMillimeters(&distanceStr);
 
-        // --- FILTER 0: Sensor Status Check ---
-        // RELAXED: Accept all inputs that are not implementation-defined error codes (819x)
-        // This allows S:6 (Sigma Fail) to pass through if the distance looks valid.
-        
         if (distance >= 8190) {
              // 8190/8191 = Hardware error / Out of range
              distance = (uint16_t)prev_valid_dist; 
@@ -693,14 +421,10 @@ int main(void)
         }
  
 
-		// 1. Filtracja Medianowa (usuwanie szpilek z surowego odczytu)
-		// Rzutowanie na float dla zachowania precyzji w medianie
+		// Filtracja Medianowa (usuwanie szpilek z surowego odczytu)
 		float dist_median = MedianFilter_Apply(&median_filter, (float) distance);
 
-        // --- FILTER 1: Jump Rejection (Spike Filter) ---
-        // Accept all statuses except hardware errors (S:255, S:8190+)
-        // S:0 = Good, S:4 = Phase warning, S:6 = Sigma warning, S:9/S:11 = SNR warning
-        // These warnings are OK if the value is stable
+        // Filtracja Skoków (Spike Filter)
         if (loop_counter > 10) { // Allow startup
              float jump = dist_median - prev_valid_dist;
              if (jump < 0) jump = -jump;
@@ -725,19 +449,16 @@ int main(void)
              prev_valid_dist = dist_median;
         }
 
-		// --- CALIBRATION MODE: Send RAW data only, skip PID ---
-		if (!calibration_ready) {
+		if (!Calibration_IsReady()) {
 			// Keep sending status message every 2 seconds
 			static uint32_t last_cal_msg = 0;
 			if (HAL_GetTick() - last_cal_msg > 2000) {
 				sprintf(msg, "[WAITING] Calibration needed (%d/5 points)\r\n", 
-				        __builtin_popcount(cal_points_received));
+				        __builtin_popcount(Calibration_GetReceivedPointsMask()));
 				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
 				last_cal_msg = HAL_GetTick();
 			}
 			
-			// Send RAW sensor data for calibration (no PID, no filtering)
-            // THROTTLE: Send only every 5th sample (10Hz) to save UART bandwidth for Rx
             static uint8_t cal_throttle = 0;
             cal_throttle++;
             
@@ -752,56 +473,31 @@ int main(void)
     			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 10);
             }
 			
-			// Blink LED to indicate waiting
-			HAL_GPIO_TogglePin(GPIOB, LD2_Pin); // Red LED
+			HAL_GPIO_TogglePin(GPIOB, LD2_Pin); 
 			continue; // Skip PID and servo control
 		}
 
-
-		// 2. Kalibracja: Multi-Point Interpolation
-		// Use the multi-point table to fix non-linearity
 #if USE_CALIBRATION
-		float dist_calibrated = InterpolateDistance(dist_median);
+		float dist_calibrated = Calibration_Interpolate(dist_median);
 #else
 		float dist_calibrated = dist_median;
 #endif
 
+		// Filtracja 1-Euro: wyłączone
+		float filtered_dist = dist_calibrated; 
 
-
-
-
-
-
-
-
-		// 3. Filtracja 1-Euro: DISABLED for zero lag
-		// float filtered_dist = OneEuro_Update(&one_euro, dist_calibrated, HAL_GetTick());
-		float filtered_dist = dist_calibrated; // Pass-through - no additional filtering
-
-		// Update zmiennej display (chcemy widzieć skalibrowany dystans jako "Raw" w GUI, czy surowy?)
-		// GUI wyświetla "D:xxx" jako Raw. Żeby widzieć poprawność kalibracji, wyślijmy skalibrowany.
 		distance = (uint16_t) dist_calibrated;
 
-
-
-		// Wysyłanie w formacie z CRC
 		float current_error = g_setpoint - filtered_dist;
-
-		// DEAD ZONE: DISABLED (User request for less lag)
 
 		// if (current_error > -dead_zone && current_error < dead_zone) {
 		//    current_error = 0.0f; 
 		// }
 
-		// --- PID Control Loop ---
-
-		// Compute PID Output (with Derivative-on-Measurement)
-		float pid_angle = ServoPID_Compute(&pid, current_error, filtered_dist);
+        float pid_angle = ServoPID_Compute(&pid, current_error, filtered_dist);
 		
-		// RATE LIMITER: DISABLED for maximum responsiveness
-		// Servo can change angle instantly to track fast ball movement
 		static float prev_servo_angle = SERVO_CENTER;
-		float max_angle_change = 180.0f; // NO LIMIT - full range per iteration
+		float max_angle_change = 180.0f; 
 		
 		float angle_diff = pid_angle - prev_servo_angle;
 		if (angle_diff > max_angle_change) {
@@ -810,22 +506,16 @@ int main(void)
 		    pid_angle = prev_servo_angle - max_angle_change;
 		}
 		
-		// Clamp Servo Angle (Safety Limits 65 - 135)
 		if (pid_angle < SERVO_MIN_LIMIT) pid_angle = SERVO_MIN_LIMIT;
 		if (pid_angle > SERVO_MAX_LIMIT) pid_angle = SERVO_MAX_LIMIT;
 		
-		// CRITICAL: Update prev_servo_angle AFTER clamping
-		// This ensures rate limiter knows actual servo position
 		prev_servo_angle = pid_angle;
 		
-		// SERVO OUTPUT SMOOTHING (reduces chattering without affecting PID)
-		// PID computes full-speed, but servo receives smoothed command
 		static float ema_servo_angle = SERVO_CENTER;
-		float alpha_servo = 0.55f; // 30% new, 70% old (adjust: higher = faster/noisier)
+		float alpha_servo = 0.55f; 
 		ema_servo_angle = alpha_servo * pid_angle + (1.0f - alpha_servo) * ema_servo_angle;
 		float smoothed_angle = ema_servo_angle;
 		
-		// SERVO DEADBAND: DISABLED (Always update)
 		SetServoAngle(smoothed_angle);
 
 		
@@ -836,11 +526,10 @@ int main(void)
 			last_sent_angle = smoothed_angle;
 		}
 		*/
-		// Else: change too small, don't update (prevents buzzing) 
  
 
 		char data_buffer[64];
-		// Standard protocol: D:Dist; A:Angle; F:Filtered; E:Error; S:Status
+		// D:Dist; A:Angle; F:Filtered; E:Error; S:Status
 		int len = sprintf(data_buffer, "D:%d;A:%d;F:%d;E:%d;S:%d", 
 				distance, (int)smoothed_angle, (int)filtered_dist,
 				(int)current_error, distanceStr.rangeStatus);
@@ -850,12 +539,8 @@ int main(void)
 		sprintf(msg, "%s;C:%02X\r\n", data_buffer, out_crc);
 		HAL_UART_Transmit(&huart3, (uint8_t*) msg, strlen(msg), 10); // Timeout 10ms
 		
-		// RATE CONTROL: Limited by sensor TIMING BUDGET (80ms)
-		// Small delay to allow UART/Interupts to process
 		HAL_Delay(5);
 	}
-
-
 
 	loop_counter++;
 

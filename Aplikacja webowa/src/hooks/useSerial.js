@@ -27,14 +27,21 @@ export const useSerial = () => {
     const bufferRef = useRef("");
     const logBufferRef = useRef({ tx: [], rx: [] });
     const MAX_HISTORY = 100;
+    const MAX_BUFFER_SIZE = 10000; // 10KB limit for incoming serial buffer
 
     // Helper to buffer logs instead of setting state directly
     const addToLogBuffer = useCallback((msg, type) => {
         const entry = { time: new Date().toLocaleTimeString(), msg, type };
         if (type === "tx") {
-            logBufferRef.current.tx.push(entry);
+            if (logBufferRef.current.tx.length < 500) {
+                // Safety cap
+                logBufferRef.current.tx.push(entry);
+            }
         } else {
-            logBufferRef.current.rx.push(entry);
+            if (logBufferRef.current.rx.length < 500) {
+                // Safety cap
+                logBufferRef.current.rx.push(entry);
+            }
         }
     }, []);
 
@@ -95,12 +102,15 @@ export const useSerial = () => {
 
                     if (hasTx) {
                         // Keep last 100 TX commands (User wants them to stay)
-                        newTx = [...prev.tx, ...logBufferRef.current.tx].slice(-100);
+                        const incomingTx = logBufferRef.current.tx;
+                        // Avoid creating huge arrays if slight overflow
+                        newTx = [...prev.tx, ...incomingTx].slice(-100);
                         logBufferRef.current.tx = [];
                     }
                     if (hasRx) {
                         // Keep last 50 RX frames (High speed data)
-                        newRx = [...prev.rx, ...logBufferRef.current.rx].slice(-50);
+                        const incomingRx = logBufferRef.current.rx;
+                        newRx = [...prev.rx, ...incomingRx].slice(-50);
                         logBufferRef.current.rx = [];
                     }
                     return { tx: newTx, rx: newRx };
@@ -217,6 +227,14 @@ export const useSerial = () => {
                 if (done) break;
                 if (value) {
                     bufferRef.current += value;
+
+                    // PROTECTION: If buffer gets too large (garbage or no newline), clear it to prevent OOM
+                    if (bufferRef.current.length > MAX_BUFFER_SIZE) {
+                        bufferRef.current = "";
+                        log("⚠️ Buffer Overflow! Utracono dane.", "error");
+                        continue;
+                    }
+
                     // Split by newline
                     const lines = bufferRef.current.split("\n");
                     // Process all complete lines
@@ -247,6 +265,10 @@ export const useSerial = () => {
 
     const disconnect = async () => {
         keepReadingRef.current = false;
+
+        // Clear Buffers immediately to free memory
+        bufferRef.current = "";
+        logBufferRef.current = { tx: [], rx: [] };
 
         // 1. Close Reader
         if (readerRef.current) {

@@ -1,3 +1,12 @@
+/**
+ ******************************************************************************
+ * @file    servo.h
+ * @author  Piotr Bednarek Jan Andrzejewski Mateusz Banaszak
+ * @date    Jan 8, 2026
+ * @brief   Nagłówek biblioteki sterownika serwomechanizmu PWM.
+ ******************************************************************************
+ */
+
 #ifndef INC_SERVO_H_
 #define INC_SERVO_H_
 
@@ -7,11 +16,11 @@
  * @brief Struktura konfiguracyjna serwomechanizmu
  */
 typedef struct {
-    TIM_HandleTypeDef *htim;  // Uchwyt do timera (np. &htim2)
-    uint32_t channel;         // Kanał timera (np. TIM_CHANNEL_1)
-    uint32_t min_pulse;       // Wartość CCR dla minimalnego kąta (0 stopni)
-    uint32_t max_pulse;       // Wartość CCR dla maksymalnego kąta
-    uint16_t max_angle;       // Maksymalny kąt serwa
+    TIM_HandleTypeDef *htim;  ///< Uchwyt do timera (np. &htim2)
+    uint32_t channel;         ///< Kanał timera (np. TIM_CHANNEL_1)
+    uint32_t min_pulse;       ///< Wartość CCR dla minimalnego kąta (0 stopni)
+    uint32_t max_pulse;       ///< Wartość CCR dla maksymalnego kąta
+    uint16_t max_angle;       ///< Maksymalny kąt serwa
 } Servo_Handle_t;
 
 /**
