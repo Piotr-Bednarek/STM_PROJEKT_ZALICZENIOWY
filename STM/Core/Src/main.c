@@ -204,13 +204,18 @@ float ServoPID_Compute(ServoPID_Controller *pid, float error, float measurement)
 /* USER CODE BEGIN 0 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART3) {
-		if (rx_byte == '\n' || rx_byte == '\r') {
-			rx_buffer[rx_idx] = '\0';
-			if (rx_idx > 0) cmd_received = 1;
-			rx_idx = 0;
-		} else {
-			if (rx_idx < 63) {
-				rx_buffer[rx_idx++] = rx_byte;
+		// Simple flow control: if main loop hasn't processed previous command,
+		// don't overwrite buffer. Just discard char or wait.
+		// Better: only write if cmd_received == 0
+		if (cmd_received == 0) {
+			if (rx_byte == '\n' || rx_byte == '\r') {
+				rx_buffer[rx_idx] = '\0';
+				if (rx_idx > 0) cmd_received = 1;
+				rx_idx = 0;
+			} else {
+				if (rx_idx < 63) {
+					rx_buffer[rx_idx++] = rx_byte;
+				}
 			}
 		}
 		HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
@@ -653,9 +658,15 @@ int main(void)
 							sprintf(msg, "[CAL] ✅ All points received! System READY!\r\n");
 							HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
 						} else {
-							// Confirm individual point
-							sprintf(msg, "[CAL] Point %d: RAW=%.1f -> POS=%.1f (%d/5)\r\n", 
-							        cal_idx, raw_val, actual_val, __builtin_popcount(cal_points_received));
+							// Confirm individual point (Use integer math for safety)
+							int r_i = (int)raw_val;
+							int r_d = (int)((raw_val - r_i) * 10);
+							int a_i = (int)actual_val;
+							int a_d = (int)((actual_val - a_i) * 10);
+							
+							sprintf(msg, "[CAL] Point %d: RAW=%d.%d -> POS=%d.%d (%d/5)\r\n", 
+							        cal_idx, r_i, abs(r_d), a_i, abs(a_d), 
+							        __builtin_popcount(cal_points_received));
 							HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
 						}
 					}
@@ -726,16 +737,23 @@ int main(void)
 			}
 			
 			// Send RAW sensor data for calibration (no PID, no filtering)
-			char cal_buffer[64];
-			int cal_len = sprintf(cal_buffer, "D:%d;A:0;F:%d;E:0;S:%d", 
-			        (int)dist_median, (int)dist_median, distanceStr.rangeStatus);
-			uint8_t cal_crc = CalculateCRC8(cal_buffer, cal_len);
-			sprintf(msg, "%s;C:%02X\r\n", cal_buffer, cal_crc);
-			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 10);
+            // THROTTLE: Send only every 5th sample (10Hz) to save UART bandwidth for Rx
+            static uint8_t cal_throttle = 0;
+            cal_throttle++;
+            
+            if (cal_throttle >= 5) {
+                cal_throttle = 0;
+                
+    			char cal_buffer[64];
+    			int cal_len = sprintf(cal_buffer, "D:%d;A:0;F:%d;E:0;S:%d", 
+    			        (int)dist_median, (int)dist_median, distanceStr.rangeStatus);
+    			uint8_t cal_crc = CalculateCRC8(cal_buffer, cal_len);
+    			sprintf(msg, "%s;C:%02X\r\n", cal_buffer, cal_crc);
+    			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 10);
+            }
 			
 			// Blink LED to indicate waiting
 			HAL_GPIO_TogglePin(GPIOB, LD2_Pin); // Red LED
-			HAL_Delay(100);
 			continue; // Skip PID and servo control
 		}
 

@@ -270,13 +270,12 @@ class UARTApp:
         self.sample_rate_start_time = time.time()
         self.current_sample_rate = 0.0
         
-        # Clamp (Ograniczenie fizyczne belki)
-        self.clamp_min = 0
-        self.clamp_max = 290 # mm (Długość belki)
-        
-        # Zmienne kalibracji
-        self.cal_points = [None, None, None, None, None]  # 5 punktów: RAW values
-        self.cal_targets = [0, 75, 150, 225, 290]  # Pozycje docelowe w mm
+        # Zmienne do obliczania metryk
+        self.error_history_1s = []  # Historia błędów z ostatniej 1s
+        self.last_metrics_update = time.time()
+        self.ise_accumulator = 0.0
+        self.settling_start_time = None
+        self.max_overshoot = 0.0
         
         # Wątek odczytu
         self.read_thread = threading.Thread(target=self.read_loop, daemon=True)
