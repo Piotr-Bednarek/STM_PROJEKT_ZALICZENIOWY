@@ -77,6 +77,10 @@ void Error_Handler(void);
 #define RMII_RXD1_GPIO_Port GPIOC
 #define LD1_Pin GPIO_PIN_0
 #define LD1_GPIO_Port GPIOB
+#define CALIB_START_BTN_Pin GPIO_PIN_1
+#define CALIB_START_BTN_GPIO_Port GPIOB
+#define CALIB_MID_BTN_Pin GPIO_PIN_2
+#define CALIB_MID_BTN_GPIO_Port GPIOB
 #define RMII_TXD1_Pin GPIO_PIN_13
 #define RMII_TXD1_GPIO_Port GPIOB
 #define LD3_Pin GPIO_PIN_14
@@ -109,6 +113,8 @@ void Error_Handler(void);
 #define RMII_TXD0_GPIO_Port GPIOG
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
+#define CALIB_END_BTN_Pin GPIO_PIN_4
+#define CALIB_END_BTN_GPIO_Port GPIOB
 #define LD2_Pin GPIO_PIN_7
 #define LD2_GPIO_Port GPIOB
 
