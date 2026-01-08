@@ -31,6 +31,12 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+// --- Calibration Point Structure ---
+typedef struct {
+	float raw_val;
+	float actual_pos;
+} CalPoint_t;
+
 // --- Simple EMA Filter for Derivative Smoothing ---
 typedef struct {
 	float alpha;       // Smoothing factor (0-1, smaller = smoother)
@@ -60,8 +66,8 @@ typedef struct {
 
 // --- Limity Serwa ---
 #define SERVO_CENTER       100.0f
-#define SERVO_MIN_LIMIT    80.0f
-#define SERVO_MAX_LIMIT    120.0f
+#define SERVO_MIN_LIMIT    70.0f
+#define SERVO_MAX_LIMIT    130.0f
 
 // --- Konfiguracja Sprzętowa Serwa ---
 #define SERVO_MIN_CCR      500
@@ -70,13 +76,14 @@ typedef struct {
 
 // --- Tryb Testowy ---
 #define SENSOR_TEST_MODE   0  // 1 aby włączyć logowanie surowych danych czujnika
+#define USE_CALIBRATION    1 // 1 aby używać kalibracji wielopunktowej, 0 dla surowych danych
 
 // --- Filtry PID ---
-#define D_DEADBAND         3.0f   // mm - ignoruj zmiany mniejsze niż ta wartość (zwiększone z 1.5)
-#define D_FILTER_ALPHA     0.25f  // EMA alpha dla składowej D (zmniejszone z 0.4 dla gładszego działania)
+#define D_DEADBAND         0.5f   // mm - zmniejszone z 3.0 dla szybszej reakcji
+#define D_FILTER_ALPHA     0.25f  // EMA alpha dla składowej D
 
 // --- Servo Deadband (Anti-Buzzing) ---
-#define SERVO_ANGLE_DEADBAND  0.2f  // stopnie - zmniejszone z 0.3 dla szybszej reakcji
+#define SERVO_ANGLE_DEADBAND  0.0f  // DISABLED - natychmiastowa reakcja
 #define SERVO_SMOOTHING_SIZE  5     // zmniejszone z 7 dla mniejszego lag
 /* USER CODE END PD */
 
@@ -128,9 +135,9 @@ volatile uint8_t cmd_received = 0;
 // Zmienne Globalne Sterowania
 // Ball position range: 0-290mm (0 = ball at start, 290 = ball at end)
 volatile float g_setpoint = 145.0f; // Middle of beam (290/2)
-volatile float g_Kp = -0.40f;  // Zwiększone z -0.29 - bardziej agresywna reakcja
-volatile float g_Ki = -0.004f;
-volatile float g_Kd = -1.8f;  // Zwiększone z -1.2 - silniejsza antycypacja przyspieszenia
+volatile float g_Kp = -0.15f;  // Zwiększone z -0.29 - bardziej agresywna reakcja
+volatile float g_Ki = -0.0025f;
+volatile float g_Kd = -6.0f;  // Zwiększone z -1.2 - silniejsza antycypacja przyspieszenia
 
 // --- Auto-Calibration Variables ---
 volatile uint8_t calibration_mode = 0;  // 0 = normal, 1 = calibrating
@@ -142,6 +149,20 @@ volatile uint32_t cal_start_time = 0;   // Timestamp when calibration started
 volatile float sensor_min = 50.0f;      // Raw sensor value at beam START (0mm)
 volatile float sensor_max = 220.0f;     // Raw sensor value at beam END (290mm)
 volatile float sensor_middle = 115.0f;  // Raw sensor value at beam MIDDLE
+
+// --- 5-Point Calibration Table ---
+// Maps RAW sensor reading (x) to ACTUAL beam position in mm (y)
+CalPoint_t cal_table[5] = {
+	{ 50.0f,   0.0f },   // Punkt 0: Początek belki
+	{ 90.0f,   75.0f },  // Punkt 1: 25%
+	{ 175.0f,  150.0f }, // Punkt 2: Środek (50%)
+	{ 270.0f,  225.0f }, // Punkt 3: 75%
+	{ 310.0f,  290.0f }  // Punkt 4: Koniec (100%)
+};
+
+// --- Calibration State Management ---
+volatile uint8_t calibration_ready = 0;  // 0 = waiting for calibration, 1 = ready to run
+volatile uint8_t cal_points_received = 0; // Bitmask: bit 0-4 for points 0-4
 
 
 /* USER CODE END PV */
@@ -170,6 +191,9 @@ float AdaptiveEMA_Filter(AdaptiveEMA_t *ema, float measurement);
 void EMA_Init(EMA_Filter_t *ema, float alpha);
 float EMA_Update(EMA_Filter_t *ema, float new_value);
 
+// Calibration function
+float InterpolateDistance(float raw_input);
+
 // Forward declarations
 void SetServoAngle(float angle);
 void ServoPID_Init(ServoPID_Controller *pid);
@@ -193,7 +217,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	}
 }
 // --- Median Filter ---
-#define MEDIAN_WINDOW_SIZE 5
+#define MEDIAN_WINDOW_SIZE 3  // Minimal lag - only 3 samples for basic spike rejection
 typedef struct {
 	float buffer[MEDIAN_WINDOW_SIZE];
 	uint8_t index;
@@ -362,29 +386,17 @@ float ServoPID_Compute(ServoPID_Controller *pid, float error, float measurement)
 	// === P TERM ===
 	float P = pid->Kp * error;
 
-	// === I TERM (Anti-windup - EXISTING CODE) ===
-	// IMPROVED ANTI-WINDUP: Only accumulate integral if output is NOT saturated
-	// This prevents integral buildup when servo is at physical limits (65-135°)
+	// === I TERM (Simple Anti-windup) ===
+	// Only accumulate integral if output is NOT saturated
 	float tentative_output = SERVO_CENTER + P + (pid->Ki * pid->integral);
 	
-	// Track how long we've been stuck at limits
-	static uint8_t stuck_at_limit_counter = 0;
-	
-	// Use margin: only accumulate if we're at least 2° away from limits
-	// This prevents buzzing at exact limit values
-	if (tentative_output >= (SERVO_MIN_LIMIT + 2.0f) && tentative_output <= (SERVO_MAX_LIMIT - 2.0f)) {
+	// Only accumulate if we're not at servo limits
+	if (tentative_output >= (SERVO_MIN_LIMIT + 2.0f) && 
+	    tentative_output <= (SERVO_MAX_LIMIT - 2.0f)) {
 	    pid->integral += error;
-	    stuck_at_limit_counter = 0; // Reset counter when not at limit
 	} else {
-	    // At or near limits - decay integral slowly to allow recovery
-	    pid->integral *= 0.9f; // Faster decay: 10% per iteration (was 5%)
-	    
-	    // If stuck at limit for >10 iterations, RESET integral completely
-	    stuck_at_limit_counter++;
-	    if (stuck_at_limit_counter > 10) {
-	        pid->integral = 0.0f; // Hard reset to stop buzzing
-	        stuck_at_limit_counter = 0;
-	    }
+	    // At limits - decay integral slowly to allow recovery
+	    pid->integral *= 0.95f;
 	}
 	
 	// Limit integral to prevent extreme values
@@ -455,6 +467,30 @@ uint8_t CalculateCRC8(const char *data, int len) {
 	}
 	return crc;
 }
+
+// --- Multi-Point Interpolation Function ---
+float InterpolateDistance(float raw_input) {
+	// Clamp to range
+	if (raw_input <= cal_table[0].raw_val) return cal_table[0].actual_pos;
+	if (raw_input >= cal_table[4].raw_val) return cal_table[4].actual_pos;
+
+	// Find segment
+	for (int i = 0; i < 4; i++) {
+		if (raw_input >= cal_table[i].raw_val && raw_input <= cal_table[i+1].raw_val) {
+			
+			// Linear Interpolation: y = y0 + (x - x0) * (y1 - y0) / (x1 - x0)
+			float range_x = cal_table[i+1].raw_val - cal_table[i].raw_val;
+			float range_y = cal_table[i+1].actual_pos - cal_table[i].actual_pos;
+			
+			if (range_x < 0.1f) return cal_table[i].actual_pos; // Avoid div/0
+			
+			float ratio = (raw_input - cal_table[i].raw_val) / range_x;
+			return cal_table[i].actual_pos + (ratio * range_y);
+		}
+	}
+	return raw_input; // Should not reach here
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -513,11 +549,27 @@ int main(void)
 
 	// Inicjalizacja VL53L0X
 	statInfo_t_VL53L0X distanceStr;
-
 	// CRITICAL: Wait for I2C bus and sensor to stabilize
 	// VL53L0X requires ~2ms boot time after power-on, plus I2C settling
 	HAL_Delay(100); // 100ms to ensure sensor is ready
 
+	// === SOFT RESET SENSOR BEFORE INIT ===
+	// Force sensor to reload tuning settings from NVM
+	// This fixes Status 4/6/11 errors caused by corrupted state
+	HAL_UART_Transmit(&huart3, (uint8_t*) "Resetting VL53L0X...\r\n", 21, 100);
+	
+	// Method 1: Power cycle via GPIO (if XSHUT pin connected)
+	// HAL_GPIO_WritePin(VL53L0X_XSHUT_GPIO_Port, VL53L0X_XSHUT_Pin, GPIO_PIN_RESET);
+	// HAL_Delay(10);
+	// HAL_GPIO_WritePin(VL53L0X_XSHUT_GPIO_Port, VL53L0X_XSHUT_Pin, GPIO_PIN_SET);
+	// HAL_Delay(10);
+	
+	// Method 2: I2C Soft Reset (always works)
+	// Note: This might fail if sensor is in bad state - that's OK
+	uint8_t reset_val = 0x00;
+	HAL_I2C_Mem_Write(&hi2c1, ADDRESS_DEFAULT, 0x00BF, 1, &reset_val, 1, 100);
+	HAL_Delay(50); // Wait for reset to complete
+	
 	HAL_UART_Transmit(&huart3, (uint8_t*) "Initializing VL53L0X...\r\n", 25, 100);
 	if (!initVL53L0X(1, &hi2c1)) {
 		HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init Failed!\r\n", 22, 100);
@@ -525,33 +577,14 @@ int main(void)
 		HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Init Success!\r\n", 23, 100);
 	}
 
-
-	// Ustaw timeout dla odczytów - musi być większy niż timing budget
+	// === USE DEFAULT CONFIGURATION ===
+	// No custom VCSEL, timing budget, or signal rate settings
+	// Let the library use factory defaults which are:
+	// - VCSEL: 14/10 (pre/final)
+	// - Timing Budget: ~33ms
+	// - Signal Rate: 0.25 MCPS
 	
-	// ========================================================================
-	// MODIFIED CONFIGURATION - Aiming for Stability & Accuracy (Fixing S:4/S:6)
-	// ========================================================================
-	
-	// ========================================================================
-	// MODIFIED CONFIGURATION - "LONG RANGE" / WEAK SIGNAL OPTIMIZATION
-	// Fixing S:4 (Phase), S:6 (Sigma), S:11 (SNR) on dark/small targets
-	// ========================================================================
-	
-	// Signal Rate: 0.01 - Allow VERY weak signals (fixes S:11 SNR noise)
-	setSignalRateLimit(0.01f);
-	
-	// VCSEL: 18/14 - Long Range mode (Maximum sensitivity)
-	setVcselPulsePeriod(VcselPeriodPreRange, 18);
-	setVcselPulsePeriod(VcselPeriodFinalRange, 14);
-	
-	// Phase Limits: Fully relaxed
-	setPhaseCalibrationLimits(0x00, 0xFF, 0x00, 0xFF);
-	
-	// Timing Budget: 80ms (~12 Hz) - Long integration time for accuracy
-	setMeasurementTimingBudget(80000);
-	setTimeout(200); 
-
-	// Start continuous mode
+	// Start continuous mode with default settings
 	startContinuous(0);
 
 
@@ -569,7 +602,7 @@ int main(void)
 
 	// Inicjalizacja filtra 1-Euro
 	OneEuroFilter_t one_euro;
-	OneEuro_Init(&one_euro, 0.5f, 0.003f, 1.0f);
+	OneEuro_Init(&one_euro, 2.0f, 0.001f, 1.0f);  // Aggressive filtering: fast response, minimal lag
 
 	// Inicjalizacja filtra medianowego
 	MedianFilter_t median_filter;
@@ -596,15 +629,44 @@ int main(void)
 			else if (rx_buffer[0] == 'P' && rx_buffer[1] == ':') g_Kp = atof((char*)&rx_buffer[2]); 
 			else if (rx_buffer[0] == 'I' && rx_buffer[1] == ':') g_Ki = atof((char*)&rx_buffer[2]); 
 			else if (rx_buffer[0] == 'D' && rx_buffer[1] == ':') g_Kd = atof((char*)&rx_buffer[2]);
+			// --- CALIBRATION COMMANDS ---
+			// Format: "CAL0:50.0,0.0" = Set cal_table[0] = {50.0f, 0.0f}
+			else if (rx_buffer[0] == 'C' && rx_buffer[1] == 'A' && rx_buffer[2] == 'L') {
+				int cal_idx = rx_buffer[3] - '0'; // '0'-'4' -> 0-4
+				if (cal_idx >= 0 && cal_idx < 5) {
+					// Parse "CAL0:50.0,0.0"
+					char *comma = strchr((char*)&rx_buffer[5], ',');
+					if (comma != NULL) {
+						*comma = '\0'; // Split string
+						float raw_val = atof((char*)&rx_buffer[5]);
+						float actual_val = atof(comma + 1);
+						
+						cal_table[cal_idx].raw_val = raw_val;
+						cal_table[cal_idx].actual_pos = actual_val;
+						
+						// Mark point as received
+						cal_points_received |= (1 << cal_idx);
+						
+						// Check if all 5 points received (bits 0-4 set = 0b11111 = 31)
+						if (cal_points_received == 0x1F) {
+							calibration_ready = 1;
+							sprintf(msg, "[CAL] ✅ All points received! System READY!\r\n");
+							HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
+						} else {
+							// Confirm individual point
+							sprintf(msg, "[CAL] Point %d: RAW=%.1f -> POS=%.1f (%d/5)\r\n", 
+							        cal_idx, raw_val, actual_val, __builtin_popcount(cal_points_received));
+							HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
+						}
+					}
+				}
+			}
 			
 			cmd_received = 0;
 		}
 
-
-
-		// Odczyt dystansu w trybie continuous (szybki)
+		// --- READ SENSOR (Always, even during calibration) ---
 		// Odczyt dystansu w trybie continuous
-		// Removed "skip if same" logic to prevent freezing on stable values
 		distance = readRangeContinuousMillimeters(&distanceStr);
 
         // --- FILTER 0: Sensor Status Check ---
@@ -625,12 +687,16 @@ int main(void)
 		float dist_median = MedianFilter_Apply(&median_filter, (float) distance);
 
         // --- FILTER 1: Jump Rejection (Spike Filter) ---
-        // If jump > 100mm in one step (unlikely for a ball), ignore unless it persists.
+        // Accept all statuses except hardware errors (S:255, S:8190+)
+        // S:0 = Good, S:4 = Phase warning, S:6 = Sigma warning, S:9/S:11 = SNR warning
+        // These warnings are OK if the value is stable
         if (loop_counter > 10) { // Allow startup
              float jump = dist_median - prev_valid_dist;
              if (jump < 0) jump = -jump;
              
-             if (jump > 50.0f && distanceStr.rangeStatus == 0) { // 5cm jump strict limit
+             // Only reject if jump is huge (>25mm)
+             // This allows S:11 readings to pass through if they're stable
+             if (jump > 25.0f) {
                   if (invalid_count < 5) {
                       dist_median = prev_valid_dist; // Ignore this sample, use previous
                       invalid_count++;
@@ -640,69 +706,47 @@ int main(void)
                       prev_valid_dist = dist_median;
                   }
              } else {
-                 if (distanceStr.rangeStatus == 0) {
-                    prev_valid_dist = dist_median;
-                    invalid_count = 0;
-                 }
+                 // Small change or stable - always accept
+                 prev_valid_dist = dist_median;
+                 invalid_count = 0;
              }
         } else {
              prev_valid_dist = dist_median;
         }
 
-
-		// 2. Kalibracja: Raw sensor → Position on beam
-		// FINAL calibration based on actual measurements:
-		// dist_median at start: 50mm → position 0mm
-		// dist_median at end: 240mm → position 290mm
-		// Sensor range: 190mm (240-50)
-		// Beam length: 290mm
-		// Scaling: 290/190 = 1.5263
-		
-// --- 5-Point Calibration Table ---
-// Maps RAW sensor reading (x) to ACTUAL beam position in mm (y)
-// Must be sorted by RawValue (Start -> End)
-typedef struct {
-	float raw_val;
-	float actual_pos;
-} CalPoint_t;
-
-// DEFAULT VALUES (You must update these with real readings!)
-// Example: Put ball at 0mm, read "D:50". Put at 72mm, read "D:90"...
-CalPoint_t cal_table[5] = {
-	{ 0.0f,   0.0f },   // Point 0: Ball at Start
-	{ 115.0f,   72.5f },  // Point 1: Ball at 25%
-	{ 215.0f,  145.0f }, // Point 2: Ball at 50% (Middle)
-	{ 265.0f,  217.5f }, // Point 3: Ball at 75%
-	{ 280.0f,  290.0f }  // Point 4: Ball at End
-};
-
-float InterpolateDistance(float raw_input) {
-	// Clamp to range
-	if (raw_input <= cal_table[0].raw_val) return cal_table[0].actual_pos;
-	if (raw_input >= cal_table[4].raw_val) return cal_table[4].actual_pos;
-
-	// Find segment
-	for (int i = 0; i < 4; i++) {
-		if (raw_input >= cal_table[i].raw_val && raw_input <= cal_table[i+1].raw_val) {
+		// --- CALIBRATION MODE: Send RAW data only, skip PID ---
+		if (!calibration_ready) {
+			// Keep sending status message every 2 seconds
+			static uint32_t last_cal_msg = 0;
+			if (HAL_GetTick() - last_cal_msg > 2000) {
+				sprintf(msg, "[WAITING] Calibration needed (%d/5 points)\r\n", 
+				        __builtin_popcount(cal_points_received));
+				HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
+				last_cal_msg = HAL_GetTick();
+			}
 			
-			// Linear Interpolation: y = y0 + (x - x0) * (y1 - y0) / (x1 - x0)
-			float range_x = cal_table[i+1].raw_val - cal_table[i].raw_val;
-			float range_y = cal_table[i+1].actual_pos - cal_table[i].actual_pos;
+			// Send RAW sensor data for calibration (no PID, no filtering)
+			char cal_buffer[64];
+			int cal_len = sprintf(cal_buffer, "D:%d;A:0;F:%d;E:0;S:%d", 
+			        (int)dist_median, (int)dist_median, distanceStr.rangeStatus);
+			uint8_t cal_crc = CalculateCRC8(cal_buffer, cal_len);
+			sprintf(msg, "%s;C:%02X\r\n", cal_buffer, cal_crc);
+			HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 10);
 			
-			if (range_x < 0.1f) return cal_table[i].actual_pos; // Avoid div/0
-			
-			float ratio = (raw_input - cal_table[i].raw_val) / range_x;
-			return cal_table[i].actual_pos + (ratio * range_y);
+			// Blink LED to indicate waiting
+			HAL_GPIO_TogglePin(GPIOB, LD2_Pin); // Red LED
+			HAL_Delay(100);
+			continue; // Skip PID and servo control
 		}
-	}
-	return raw_input; // Should not reach here
-}
-
 
 
 		// 2. Kalibracja: Multi-Point Interpolation
-		// Use the 5-point table to fix non-linearity
+		// Use the multi-point table to fix non-linearity
+#if USE_CALIBRATION
 		float dist_calibrated = InterpolateDistance(dist_median);
+#else
+		float dist_calibrated = dist_median;
+#endif
 
 
 
@@ -712,10 +756,9 @@ float InterpolateDistance(float raw_input) {
 
 
 
-		// 3. Filtracja 1-Euro (wygładzanie skalibrowanego sygnału)
-		// 3. Filtracja: DISABLED (User request: delete all lag)
+		// 3. Filtracja 1-Euro: DISABLED for zero lag
 		// float filtered_dist = OneEuro_Update(&one_euro, dist_calibrated, HAL_GetTick());
-		float filtered_dist = dist_calibrated;
+		float filtered_dist = dist_calibrated; // Pass-through - no additional filtering
 
 		// Update zmiennej display (chcemy widzieć skalibrowany dystans jako "Raw" w GUI, czy surowy?)
 		// GUI wyświetla "D:xxx" jako Raw. Żeby widzieć poprawność kalibracji, wyślijmy skalibrowany.
@@ -737,11 +780,10 @@ float InterpolateDistance(float raw_input) {
 		// Compute PID Output (with Derivative-on-Measurement)
 		float pid_angle = ServoPID_Compute(&pid, current_error, filtered_dist);
 		
-		// RATE LIMITER: Servo can't change angle instantly
-		// Limit max change per iteration to prevent servo lag
-		// INCREASED from 3 to 5 degrees for faster response to ball movement
+		// RATE LIMITER: DISABLED for maximum responsiveness
+		// Servo can change angle instantly to track fast ball movement
 		static float prev_servo_angle = SERVO_CENTER;
-		float max_angle_change = 20.0f; // INCREASED: No rate limiting (was 5.0f)
+		float max_angle_change = 180.0f; // NO LIMIT - full range per iteration
 		
 		float angle_diff = pid_angle - prev_servo_angle;
 		if (angle_diff > max_angle_change) {
@@ -758,14 +800,14 @@ float InterpolateDistance(float raw_input) {
 		// This ensures rate limiter knows actual servo position
 		prev_servo_angle = pid_angle;
 		
-		// SMOOTHING: DISABLED (User request: delete all lag)
+		// SERVO OUTPUT SMOOTHING (reduces chattering without affecting PID)
+		// PID computes full-speed, but servo receives smoothed command
 		static float ema_servo_angle = SERVO_CENTER;
-		// float alpha_servo = 0.50f; 
-		// ema_servo_angle = alpha_servo * pid_angle + (1.0f - alpha_servo) * ema_servo_angle;
-		float smoothed_angle = pid_angle; // Pass-through
+		float alpha_servo = 0.55f; // 30% new, 70% old (adjust: higher = faster/noisier)
+		ema_servo_angle = alpha_servo * pid_angle + (1.0f - alpha_servo) * ema_servo_angle;
+		float smoothed_angle = ema_servo_angle;
 		
 		// SERVO DEADBAND: DISABLED (Always update)
-		// This might cause buzzing but removes lag
 		SetServoAngle(smoothed_angle);
 
 		

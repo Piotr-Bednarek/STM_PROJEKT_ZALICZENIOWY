@@ -119,7 +119,7 @@ class UARTApp:
         self.setpoint_var = tk.DoubleVar(value=150.0)
         scale_frame = ttk.Frame(control_frame)
         scale_frame.pack(fill="x")
-        self.setpoint_scale = tk.Scale(scale_frame, from_=0, to=300, orient="horizontal", variable=self.setpoint_var, command=self.on_setpoint_change)
+        self.setpoint_scale = tk.Scale(scale_frame, from_=0, to=290, orient="horizontal", variable=self.setpoint_var, command=self.on_setpoint_change)
         self.setpoint_scale.pack(side="left", fill="x", expand=True)
         self.setpoint_entry = ttk.Entry(scale_frame, textvariable=self.setpoint_var, width=5)
         self.setpoint_entry.pack(side="right")
@@ -164,7 +164,40 @@ class UARTApp:
         ttk.Button(control_frame, text="Wyślij Parametry", command=lambda: self.send_all_params(force=True)).pack(fill="x", pady=10)
 
 
-        # 4. LOGI TERMINAL
+        # 4. PANEL KALIBRACJI
+        cal_frame = ttk.LabelFrame(self.left_scroll_frame, text="Kalibracja 5-Punktowa", padding=10)
+        cal_frame.pack(fill="x", padx=10, pady=5)
+        
+        ttk.Label(cal_frame, text="Połóż piłkę w pozycji, kliknij przycisk:", 
+                  font=("Segoe UI", 9), foreground="#ff8800").pack(anchor="w", pady=(0,5))
+        
+        # Przyciski kalibracji
+        cal_positions = [
+            (0, "0 mm (Start)", "#ff4444"),
+            (75, "75 mm (25%)", "#ff8800"),
+            (150, "150 mm (Środek)", "#ffcc00"),
+            (225, "225 mm (75%)", "#88ff00"),
+            (290, "290 mm (Koniec)", "#00ff00")
+        ]
+        
+        for idx, (pos, label, color) in enumerate(cal_positions):
+            btn = tk.Button(cal_frame, text=f"📍 {label}", 
+                           command=lambda p=pos, i=idx: self.calibrate_point(i, p),
+                           bg=color, fg="black", font=("Segoe UI", 9, "bold"), 
+                           relief="raised", bd=2)
+            btn.pack(fill="x", pady=2)
+        
+        # Status kalibracji
+        self.cal_status_var = tk.StringVar(value="Status: Gotowy do kalibracji")
+        ttk.Label(cal_frame, textvariable=self.cal_status_var, 
+                  font=("Segoe UI", 8), foreground="#666666").pack(anchor="w", pady=(5,0))
+        
+        # Przycisk zapisu kalibracji do STM32
+        ttk.Button(cal_frame, text="💾 Zapisz Kalibrację do STM32", 
+                   command=self.save_calibration).pack(fill="x", pady=(10,0))
+
+
+        # 5. LOGI TERMINAL
         term_frame = ttk.LabelFrame(self.left_scroll_frame, text="Terminal", padding=5)
         term_frame.pack(fill="both", expand=True, padx=10, pady=5)
         
@@ -239,7 +272,11 @@ class UARTApp:
         
         # Clamp (Ograniczenie fizyczne belki)
         self.clamp_min = 0
-        self.clamp_max = 280 # mm (Długość belki)
+        self.clamp_max = 290 # mm (Długość belki)
+        
+        # Zmienne kalibracji
+        self.cal_points = [None, None, None, None, None]  # 5 punktów: RAW values
+        self.cal_targets = [0, 75, 150, 225, 290]  # Pozycje docelowe w mm
         
         # Wątek odczytu
         self.read_thread = threading.Thread(target=self.read_loop, daemon=True)
@@ -322,6 +359,66 @@ class UARTApp:
         # Debouncing dla sliderów (żeby nie zapchać UARTu)
         self.last_pid_send_time = 0
         self.last_setpoint_send_time = 0
+
+    def calibrate_point(self, index, target_pos):
+        """Zapisuje aktualny odczyt RAW jako punkt kalibracyjny"""
+        try:
+            raw_str = self.distance_value_var.get()
+            self.log_message(f"[DEBUG] Próba kalibracji punktu {index}, RAW string: '{raw_str}'\n")
+            
+            # Sprawdź czy mamy wartość
+            if raw_str == "---" or raw_str == "" or raw_str is None:
+                self.cal_status_var.set(f"❌ Błąd: Brak odczytu RAW! Poczekaj na dane z czujnika.")
+                self.log_message(f"[CAL ERROR] Brak danych RAW\n")
+                return
+            
+            current_raw = float(raw_str)
+            
+            self.cal_points[index] = current_raw
+            
+            # Podświetl status
+            completed = sum(1 for p in self.cal_points if p is not None)
+            self.cal_status_var.set(f"✅ Punkt {index+1}/5: {target_pos}mm → RAW:{current_raw:.0f} | Zebrano: {completed}/5")
+            self.log_message(f"[CAL] ✅ Punkt {index}: {target_pos}mm = RAW {current_raw:.0f}\n")
+            
+            if completed == 5:
+                self.cal_status_var.set(f"🎉 Wszystkie 5 punktów zapisane! Kliknij 'Zapisz do STM32'")
+        except ValueError as e:
+            self.cal_status_var.set(f"❌ Błąd konwersji: {raw_str}")
+            self.log_message(f"[CAL ERROR] ValueError: {e}, wartość: '{raw_str}'\n")
+        except Exception as e:
+            self.cal_status_var.set(f"❌ Błąd: {e}")
+            self.log_message(f"[CAL ERROR] Nieoczekiwany błąd: {e}\n")
+
+    def save_calibration(self):
+        """Wysyła wszystkie punkty kalibracji do STM32"""
+        if not self.serial or not self.running:
+            self.cal_status_var.set("❌ Brak połączenia!")
+            return
+        
+        # Sprawdź czy wszystkie punkty są zapisane
+        if any(p is None for p in self.cal_points):
+            missing = [i for i, p in enumerate(self.cal_points) if p is None]
+            self.cal_status_var.set(f"❌ Brak punktów: {missing}")
+            return
+        
+        try:
+            # Wyślij komendę kalibracji dla każdego punktu
+            for idx in range(5):
+                raw_val = self.cal_points[idx]
+                target_val = self.cal_targets[idx]
+                cmd = f"CAL{idx}:{raw_val:.1f},{target_val:.1f}"
+                crc = self.calculate_crc8(cmd)
+                msg = f"{cmd};C:{crc:02X}\n"
+                self.serial.write(msg.encode())
+                self.log_message(f"[CAL TX] {msg.strip()}\n")
+                time.sleep(0.1)  # Delay dla STM32
+            
+            self.cal_status_var.set("✅ Kalibracja wysłana do STM32!")
+            self.log_message("[CAL] ✅ Kalibracja zapisana pomyślnie!\n")
+        except Exception as e:
+            self.cal_status_var.set(f"❌ Błąd: {e}")
+            self.log_message(f"[CAL ERROR] {e}\n")
 
     def on_setpoint_change(self, event):
         if time.time() - self.last_setpoint_send_time > 0.1:
