@@ -73,7 +73,7 @@ typedef struct {
 #define D_FILTER_ALPHA     0.25f  // Wygładzanie dla członu D (0.0 - 1.0)
 
 // Wygładzanie Serwa
-#define SERVO_ANGLE_DEADBAND  0.0f // Wyłączona strefa nieczułości serwa
+#define SERVO_ANGLE_DEADBAND  0.8f // Strefa nieczułości serwa (0.8 stopnia) - ignoruje małe drgania
 #define SERVO_SMOOTHING_SIZE  5    // Ilość próbek do wygładzania ruchu
 /* USER CODE END PD */
 
@@ -196,18 +196,25 @@ float ServoPID_Compute(ServoPID_Controller *pid, float error, float measurement)
 
 	float P = pid->Kp * error;
 
-	// Całkujemy uchyb tylko jeśli wyjście nie jest nasycone (nie osiągnęło limitów)
-	float tentative_output = SERVO_CENTER + P + (pid->Ki * pid->integral);
+	// Anti-Windup: Warunkowe całkowanie (Clamping)
+	// Całkujemy tylko wtedy, gdy wyjście NIE jest nasycone LUB gdy błąd działa w stronę "odnasycenia"
 	
-	if (tentative_output >= (SERVO_MIN_LIMIT + 2.0f) && 
-	    tentative_output <= (SERVO_MAX_LIMIT - 2.0f)) {
-	    pid->integral += error;
-	} else {
-	    pid->integral *= 0.95f;
+	// Obliczenie hipotetycznego wyjścia (bez nowego I)
+	float tentative_output = SERVO_CENTER + P + (pid->Ki * pid->integral);
+
+	int saturated = 0;
+	if (tentative_output > SERVO_MAX_LIMIT || tentative_output < SERVO_MIN_LIMIT) {
+		saturated = 1;
 	}
 	
-	if (pid->integral > 5000.0f) pid->integral = 5000.0f;
-	if (pid->integral < -5000.0f) pid->integral = -5000.0f;
+	// Jeśli nie ma nasycenia, lub jeśli błąd ma przeciwny znak niż całka (odwijanie), całkujemy
+	if (!saturated || (error * pid->integral < 0)) {
+		pid->integral += error;
+	}
+	
+	// Twardy limit całki (zabezpieczenie)
+	if (pid->integral > 3000.0f) pid->integral = 3000.0f;
+	if (pid->integral < -3000.0f) pid->integral = -3000.0f;
     
 	float I = pid->Ki * pid->integral;
 
@@ -351,6 +358,10 @@ int main(void)
 	MedianFilter_t median_filter;
 	MedianFilter_Init(&median_filter);
 
+	// Lekki filtr EMA dla czujnika (Alpha mniejsze = mocniejsze filtrowanie)
+	EMA_Filter_t dist_ema;
+	EMA_Init(&dist_ema, 0.3f);
+
 	// Inicjalizacja kontrolera PID
 	ServoPID_Controller pid;
 	ServoPID_Init(&pid);
@@ -484,15 +495,19 @@ int main(void)
 #endif
 
 		// Filtracja 1-Euro: wyłączone
-		float filtered_dist = dist_calibrated; 
+		// float filtered_dist = dist_calibrated; 
+		
+		// Lekki filtr EMA (alpha=0.85)
+		float filtered_dist = EMA_Update(&dist_ema, dist_calibrated); 
 
 		distance = (uint16_t) dist_calibrated;
 
 		float current_error = g_setpoint - filtered_dist;
 
-		// if (current_error > -dead_zone && current_error < dead_zone) {
-		//    current_error = 0.0f; 
-		// }
+		// Strefa nieczułości dla uchybu (stabilizacja w punkcie równowagi)
+		if (current_error > -2.0f && current_error < 2.0f) {
+		   current_error = 0.0f; 
+		}
 
         float pid_angle = ServoPID_Compute(&pid, current_error, filtered_dist);
 		
@@ -516,16 +531,14 @@ int main(void)
 		ema_servo_angle = alpha_servo * pid_angle + (1.0f - alpha_servo) * ema_servo_angle;
 		float smoothed_angle = ema_servo_angle;
 		
-		SetServoAngle(smoothed_angle);
-
+		static float last_sent_angle = SERVO_CENTER;
+		float angle_change = (smoothed_angle > last_sent_angle) ? (smoothed_angle - last_sent_angle) : (last_sent_angle - smoothed_angle);
 		
-		/*
 		if (angle_change >= SERVO_ANGLE_DEADBAND) {
 			// Significant change - update servo
 			SetServoAngle(smoothed_angle);
 			last_sent_angle = smoothed_angle;
 		}
-		*/
  
 
 		char data_buffer[64];

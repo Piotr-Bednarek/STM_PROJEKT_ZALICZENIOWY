@@ -26,44 +26,38 @@ export const Metrics = ({ data, dataHistory }) => {
             };
         }
 
-        // Weź dane z ostatniej sekundy (zakładając ~50-100Hz, bierzemy ostatnie 100 próbek)
-        const recentData = dataHistory.slice(-100);
+        const recentData = dataHistory.slice(-25);
 
-        // Średni uchyb procentowy
         const avgError = recentData.reduce((sum, d) => sum + Math.abs(d.error), 0) / recentData.length;
         const avgSetpoint = recentData.reduce((sum, d) => sum + d.setpoint, 0) / recentData.length;
         const avgErrorPercent = avgSetpoint > 0 ? (avgError / avgSetpoint) * 100 : 0;
 
-        // Stabilność (odchylenie standardowe błędu)
         const errorVariance = recentData.reduce((sum, d) => sum + Math.pow(d.error - avgError, 2), 0) / recentData.length;
         const stability = 100 - Math.min(Math.sqrt(errorVariance), 100);
 
-        // Min/Max dystans
         const distances = recentData.map((d) => d.filtered);
         const minDistance = Math.min(...distances);
         const maxDistance = Math.max(...distances);
 
         return {
             avgErrorPercent: avgErrorPercent.toFixed(1),
-            stability: stability.toFixed(0),
-            minDistance: minDistance.toFixed(0),
-            maxDistance: maxDistance.toFixed(0),
+            stdDev: Math.sqrt(errorVariance).toFixed(1),
         };
     }, [dataHistory]);
 
     return (
         <div className="metrics-grid">
-            {/* First row - podstawowe metryki */}
+            {/* First row - Główne Pomiary */}
             <MetricCard label="Dystans (Raw)" value={data.distance.toFixed(0)} unit="mm" color="var(--chart-dist)" />
             <MetricCard label="Dystans (Filtrowany)" value={data.filtered.toFixed(0)} unit="mm" color="var(--chart-filter)" />
             <MetricCard label="Uchyb (Błąd)" value={data.error.toFixed(1)} unit="mm" color="var(--chart-error)" />
-            <MetricCard label="Częstotliwość" value={data.freq} unit="Hz" color="var(--text-secondary)" />
+            <MetricCard label="Średni Uchyb (25 próbek)" value={computedMetrics.avgErrorPercent} unit="%" color="var(--warning)" />
 
-            {/* Second row - zaawansowane metryki */}
-            <MetricCard label="Średni Uchyb" value={computedMetrics.avgErrorPercent} unit="%" color="var(--warning)" />
-            <MetricCard label="Stabilność" value={computedMetrics.stability} unit="%" color="var(--success)" />
-            <MetricCard label="Min (1s)" value={computedMetrics.minDistance} unit="mm" color="var(--primary)" />
-            <MetricCard label="Max (1s)" value={computedMetrics.maxDistance} unit="mm" color="var(--primary)" />
+            {/* Second row - Diagnostyka */}
+            <MetricCard label="Częstotliwość" value={data.freq} unit="Hz" color="var(--text-secondary)" />
+            <MetricCard label="Kąt Serwa" value={data.control.toFixed(0)} unit="°" color="#3498db" />
+            <MetricCard label="Odchylenie Std." value={computedMetrics.stdDev} unit="mm" color="#9b59b6" />
+            <MetricCard label="Cel (Setpoint)" value={data.setpoint.toFixed(0)} unit="mm" color="var(--chart-setpoint)" />
         </div>
     );
 };
