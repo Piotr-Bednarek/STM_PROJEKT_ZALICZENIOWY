@@ -3,7 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export const useSerial = () => {
     const [isConnected, setIsConnected] = useState(false);
     const [port, setPort] = useState(null);
-    const [logs, setLogs] = useState([]);
+
+    // Split logs into TX (sent) and RX (received) to prevent overwriting and memory issues
+    const [serialHistory, setSerialHistory] = useState({ tx: [], rx: [] });
+
     const [dataHistory, setDataHistory] = useState([]);
     const [latestData, setLatestData] = useState({
         distance: 0,
@@ -11,21 +14,44 @@ export const useSerial = () => {
         error: 0,
         control: 0,
         setpoint: 150,
+        freq: 0,
     });
 
     const readerRef = useRef(null);
     const writerRef = useRef(null);
     const streamClosedRef = useRef(null);
-    const streamsRef = useRef(null); // Keep references to the streams themselves
+    const streamsRef = useRef(null);
     const keepReadingRef = useRef(false);
 
-    // Buffer for incoming chunks
+    // Buffer for logs to capture high-frequency data without re-rendering every frame
     const bufferRef = useRef("");
-    const MAX_HISTORY = 200;
+    const logBufferRef = useRef({ tx: [], rx: [] });
+    const MAX_HISTORY = 100;
+    const MAX_BUFFER_SIZE = 10000; // 10KB limit for incoming serial buffer
 
-    const log = useCallback((msg, type = "info") => {
-        setLogs((prev) => [...prev.slice(-99), { time: new Date().toLocaleTimeString(), msg, type }]);
+    // Helper to buffer logs instead of setting state directly
+    const addToLogBuffer = useCallback((msg, type) => {
+        const entry = { time: new Date().toLocaleTimeString(), msg, type };
+        if (type === "tx") {
+            if (logBufferRef.current.tx.length < 500) {
+                // Safety cap
+                logBufferRef.current.tx.push(entry);
+            }
+        } else {
+            if (logBufferRef.current.rx.length < 500) {
+                // Safety cap
+                logBufferRef.current.rx.push(entry);
+            }
+        }
     }, []);
+
+    // Legacy log helper for system messages (aliased to addToLogBuffer)
+    const log = useCallback(
+        (msg, type = "info") => {
+            addToLogBuffer(msg, type);
+        },
+        [addToLogBuffer]
+    );
 
     const calculateCRC8 = (text) => {
         let crc = 0x00;
@@ -48,11 +74,51 @@ export const useSerial = () => {
     const latestDataRef = useRef({ distance: 0, filtered: 0, error: 0, control: 0, setpoint: 150 });
     const newDataAvailableRef = useRef(false);
 
-    // Throttled update loop
+    const sampleCountRef = useRef(0);
+    const lastFreqUpdateRef = useRef(Date.now());
+
+    // Throttled update loop (Runs at ~20FPS)
     useEffect(() => {
         const interval = setInterval(() => {
+            const now = Date.now();
+
+            // 1. Calculate Frequency every ~1s
+            if (now - lastFreqUpdateRef.current >= 1000) {
+                const hz = sampleCountRef.current;
+                latestDataRef.current.freq = hz;
+                sampleCountRef.current = 0;
+                lastFreqUpdateRef.current = now;
+                newDataAvailableRef.current = true;
+            }
+
+            // 2. Flush Log Buffer to State
+            const hasTx = logBufferRef.current.tx.length > 0;
+            const hasRx = logBufferRef.current.rx.length > 0;
+
+            if (hasTx || hasRx) {
+                setSerialHistory((prev) => {
+                    let newTx = prev.tx;
+                    let newRx = prev.rx;
+
+                    if (hasTx) {
+                        // Keep last 100 TX commands (User wants them to stay)
+                        const incomingTx = logBufferRef.current.tx;
+                        // Avoid creating huge arrays if slight overflow
+                        newTx = [...prev.tx, ...incomingTx].slice(-100);
+                        logBufferRef.current.tx = [];
+                    }
+                    if (hasRx) {
+                        // Keep last 50 RX frames (High speed data)
+                        const incomingRx = logBufferRef.current.rx;
+                        newRx = [...prev.rx, ...incomingRx].slice(-50);
+                        logBufferRef.current.rx = [];
+                    }
+                    return { tx: newTx, rx: newRx };
+                });
+            }
+
+            // 3. Update Metrics Data
             if (newDataAvailableRef.current) {
-                // Clone stats to trigger re-render
                 const snap = { ...latestDataRef.current };
                 setLatestData(snap);
 
@@ -64,52 +130,59 @@ export const useSerial = () => {
 
                 newDataAvailableRef.current = false;
             }
-        }, 50); // Update GUI at 20 FPS max
+        }, 100); // Update GUI at 10 FPS to save memory
 
         return () => clearInterval(interval);
     }, []);
 
-    const processLine = useCallback((line) => {
-        // ... (Parsing logic same as before, but updates ref)
-        let valid = false;
-        let payload = line;
+    const processLine = useCallback(
+        (line) => {
+            let valid = false;
+            let payload = line;
 
-        if (line.includes(";C:")) {
-            const parts = line.split(";C:");
-            if (parts.length === 2) {
-                const dataPart = parts[0];
-                const crcRecv = parseInt(parts[1], 16);
-                const crcCalc = calculateCRC8(dataPart);
-                if (crcCalc === crcRecv) {
-                    valid = true;
-                    payload = dataPart;
+            if (line.includes(";C:")) {
+                const parts = line.split(";C:");
+                if (parts.length === 2) {
+                    const dataPart = parts[0];
+                    const crcRecv = parseInt(parts[1], 16);
+                    const crcCalc = calculateCRC8(dataPart);
+                    if (crcCalc === crcRecv) {
+                        valid = true;
+                        payload = dataPart;
+                        // Log valid received frame
+                        log(`📥 RX: ${line}`, "info");
+                    } else {
+                        // Log CRC error
+                        log(`❌ CRC: ${line} (calc:${crcCalc.toString(16).toUpperCase()}, recv:${crcRecv.toString(16).toUpperCase()})`, "error");
+                    }
                 }
+            } else {
+                // Log frame without CRC (if any)
+                log(`📥 RX (no CRC): ${line}`, "info");
             }
-        }
 
-        if (valid) {
-            // Update Ref directly (fast, no render)
-            const segments = payload.split(";");
-            const currentFnData = latestDataRef.current; // access ref
+            if (valid) {
+                // Update Ref directly (fast, no render)
+                sampleCountRef.current++;
+                const segments = payload.split(";");
+                const currentFnData = latestDataRef.current; // access ref
 
-            segments.forEach((seg) => {
-                if (seg.startsWith("D:")) {
-                    currentFnData.distance = Math.max(0, Math.min(parseFloat(seg.substring(2)), 300));
-                } else if (seg.startsWith("F:")) {
-                    currentFnData.filtered = parseFloat(seg.substring(2));
-                } else if (seg.startsWith("E:")) {
-                    currentFnData.error = parseFloat(seg.substring(2));
-                } else if (seg.startsWith("A:")) {
-                    currentFnData.control = parseFloat(seg.substring(2));
-                }
-            });
-            // We assume Setpoint is handled via sendSetpoint optimistically,
-            // OR if STM sends it back, update it here too.
-            // For now, keep existing setpoint.
-
-            newDataAvailableRef.current = true;
-        }
-    }, []);
+                segments.forEach((seg) => {
+                    if (seg.startsWith("D:")) {
+                        currentFnData.distance = Math.max(0, Math.min(parseFloat(seg.substring(2)), 290));
+                    } else if (seg.startsWith("F:")) {
+                        currentFnData.filtered = parseFloat(seg.substring(2));
+                    } else if (seg.startsWith("E:")) {
+                        currentFnData.error = parseFloat(seg.substring(2));
+                    } else if (seg.startsWith("A:")) {
+                        currentFnData.control = parseFloat(seg.substring(2));
+                    }
+                });
+                newDataAvailableRef.current = true;
+            }
+        },
+        [log]
+    );
 
     const connect = async () => {
         if (!navigator.serial) {
@@ -119,7 +192,7 @@ export const useSerial = () => {
 
         try {
             const selectedPort = await navigator.serial.requestPort();
-            await selectedPort.open({ baudRate: 9600 }); // Default match Python app
+            await selectedPort.open({ baudRate: 115200 }); // Default match Python app
 
             setPort(selectedPort);
             setIsConnected(true);
@@ -154,6 +227,14 @@ export const useSerial = () => {
                 if (done) break;
                 if (value) {
                     bufferRef.current += value;
+
+                    // PROTECTION: If buffer gets too large (garbage or no newline), clear it to prevent OOM
+                    if (bufferRef.current.length > MAX_BUFFER_SIZE) {
+                        bufferRef.current = "";
+                        log("⚠️ Buffer Overflow! Utracono dane.", "error");
+                        continue;
+                    }
+
                     // Split by newline
                     const lines = bufferRef.current.split("\n");
                     // Process all complete lines
@@ -184,6 +265,10 @@ export const useSerial = () => {
 
     const disconnect = async () => {
         keepReadingRef.current = false;
+
+        // Clear Buffers immediately to free memory
+        bufferRef.current = "";
+        logBufferRef.current = { tx: [], rx: [] };
 
         // 1. Close Reader
         if (readerRef.current) {
@@ -262,33 +347,49 @@ export const useSerial = () => {
             const crc = calculateCRC8(cmd);
             const msg = `${cmd};C:${crc.toString(16).toUpperCase().padStart(2, "0")}\n`;
             await writerRef.current.write(msg);
-            log(`Wysłano: ${msg.trim()}`, "tx");
+            addToLogBuffer(`${msg.trim()}`, "tx"); // Use buffer for TX logs too
         } catch (err) {
             log(`Błąd wysyłania: ${err}`, "error");
         }
     };
 
     const sendSetpoint = (val) => {
-        // Format: SET:150.0
-        sendCommand(`SET:${val.toFixed(1)}`);
+        // Format: S:150.0
+        sendCommand(`S:${val.toFixed(1)}`);
         // Update both Reace state (optimistic) AND Ref (so loop doesn't overwrite it with 0)
         latestDataRef.current.setpoint = val;
         setLatestData((prev) => ({ ...prev, setpoint: val }));
     };
 
-    const sendPid = (kp, ki, kd) => {
-        // Format: PID:Kp;Ki;Kd
-        sendCommand(`PID:${kp.toFixed(4)};${ki.toFixed(5)};${kd.toFixed(1)}`);
+    const sendPid = async (kp, ki, kd) => {
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+        // Send P
+        await sendCommand(`P:${kp.toFixed(4)}`);
+        await delay(200);
+
+        // Send I
+        await sendCommand(`I:${ki.toFixed(5)}`);
+        await delay(200);
+
+        // Send D
+        await sendCommand(`D:${kd.toFixed(1)}`);
+    };
+
+    const sendCalibration = async (index, rawValue, targetValue) => {
+        // Format: CAL0:123.4,0.0
+        await sendCommand(`CAL${index}:${rawValue.toFixed(1)},${targetValue.toFixed(1)}`);
     };
 
     return {
         isConnected,
         connect,
         disconnect,
-        logs,
+        logs: serialHistory, // Export split history object {tx, rx}
         latestData,
         dataHistory,
         sendSetpoint,
         sendPid,
+        sendCalibration,
     };
 };

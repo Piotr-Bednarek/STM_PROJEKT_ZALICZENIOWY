@@ -50,16 +50,7 @@ const CommonChart = ({ data, lines, height = 200, domain = ["auto", "auto"] }) =
                         <YAxis domain={domain} stroke="var(--text-muted)" fontSize={10} tickFormatter={(val) => Math.round(val)} width={30} />
                         <Tooltip content={<CustomTooltip />} isAnimationActive={false} />
                         {lines.map((line, idx) => (
-                            <Line
-                                key={idx}
-                                type="monotone"
-                                dataKey={line.dataKey}
-                                stroke={line.color}
-                                dot={false}
-                                strokeWidth={2}
-                                isAnimationActive={false}
-                                strokeDasharray={line.dash}
-                            />
+                            <Line key={idx} type="monotone" dataKey={line.dataKey} stroke={line.color} dot={false} strokeWidth={2} isAnimationActive={false} strokeDasharray={line.dash} />
                         ))}
                     </LineChart>
                 </ResponsiveContainer>
@@ -80,16 +71,32 @@ export const Charts = ({ dataHistory }) => {
             <div style={{ marginBottom: "4px" }}>
                 <span className="chart-title">Odległość i Setpoint</span>
             </div>
-            <CommonChart
-                data={dataHistory}
-                height={250}
-                domain={[0, 300]}
-                lines={[
-                    { dataKey: "setpoint", color: "var(--chart-setpoint)", dash: "4 4" },
-                    { dataKey: "distance", color: "var(--chart-dist)", dash: "2 2" },
-                    { dataKey: "filtered", color: "var(--chart-filter)" },
-                ]}
-            />
+            <div style={{ display: "flex", gap: "8px" }}>
+                <div style={{ flex: 7, minWidth: 0 }}>
+                    <CommonChart
+                        data={dataHistory}
+                        height={250}
+                        domain={[0, 300]}
+                        lines={[
+                            { dataKey: "setpoint", color: "var(--chart-setpoint)", dash: "4 4" },
+                            { dataKey: "distance", color: "var(--chart-dist)", dash: "2 2" },
+                            { dataKey: "filtered", color: "var(--chart-filter)" },
+                        ]}
+                    />
+                </div>
+                <div style={{ flex: 3, minWidth: 0 }}>
+                    <CommonChart
+                        data={dataHistory.slice(-30)}
+                        height={250}
+                        domain={["auto", "auto"]}
+                        lines={[
+                            { dataKey: "setpoint", color: "var(--chart-setpoint)", dash: "4 4" },
+                            { dataKey: "distance", color: "var(--chart-dist)", dash: "2 2" },
+                            { dataKey: "filtered", color: "var(--chart-filter)" },
+                        ]}
+                    />
+                </div>
+            </div>
 
             {/* Error Chart */}
             <div style={{ marginBottom: "4px" }}>

@@ -9,7 +9,7 @@ import { Metrics } from "./Metrics";
 import { Terminal } from "./Terminal";
 
 export const Dashboard = () => {
-    const { isConnected, connect, disconnect, logs, latestData, dataHistory, sendSetpoint, sendPid } = useSerial();
+    const { isConnected, connect, disconnect, logs, latestData, dataHistory, sendSetpoint, sendPid, sendCalibration } = useSerial();
 
     return (
         <div className="app-container">
@@ -43,14 +43,17 @@ export const Dashboard = () => {
 
             {/* Main Content */}
             <main className="main-content">
-                <div className="dashboard-grid">
-                    {/* Left Column: Controls & Metrics */}
-                    <div className="left-panel custom-scrollbar">
-                        {/* Status Cards */}
-                        <Metrics data={latestData} />
+                {/* Metrics Row - Full Width */}
+                <div className="metrics-row">
+                    <Metrics data={latestData} dataHistory={dataHistory} />
+                </div>
 
+                {/* Bottom Grid: Control Panel + Charts */}
+                <div className="bottom-grid">
+                    {/* Left Column: Control Panel & Terminal */}
+                    <div className="left-panel custom-scrollbar">
                         {/* Control Panel */}
-                        <ControlPanel sendSetpoint={sendSetpoint} sendPid={sendPid} distance={latestData.distance} externalSetpoint={latestData.setpoint} />
+                        <ControlPanel sendSetpoint={sendSetpoint} sendPid={sendPid} sendCalibration={sendCalibration} distance={latestData.filtered} externalSetpoint={latestData.setpoint} rawDistance={latestData.distance} />
 
                         {/* Terminal */}
                         <div style={{ flex: 1, minHeight: "200px" }}>

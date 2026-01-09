@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 
-export const BeamVisualizer = ({ distance, setpoint, onSetpointChange, min = 0, max = 300 }) => {
+export const BeamVisualizer = ({ distance, setpoint, onSetpointChange, min = 0, max = 290 }) => {
     const svgRef = useRef(null);
     const [isDragging, setIsDragging] = useState(false);
 
@@ -89,57 +89,31 @@ export const BeamVisualizer = ({ distance, setpoint, onSetpointChange, min = 0, 
                         If height is 120px, 70% is 84px. Ball radius 15px. Center should be 84-15-half_beam = ~65px?
                         Let's approximate: y="55%"
                     */}
-                    <circle
-                        cx={`${toPercent(distance)}%`}
-                        cy={`${beamY - 12}%`}
-                        r={ballRadius}
-                        fill="url(#ballGradientSide)"
-                        stroke="#005500"
-                        strokeWidth="1"
-                        filter="url(#shadowSide)"
-                        style={{ transition: "cx 0.05s linear" }}
-                    />
+                    <circle cx={`${toPercent(distance)}%`} cy={`${beamY - 12}%`} r={ballRadius} fill="url(#ballGradientSide)" stroke="#005500" strokeWidth="1" filter="url(#shadowSide)" style={{ transition: "cx 0.05s linear" }} />
 
                     {/* --- SETPOINT MARKER --- */}
                     {/* A flag or arrow ABOVE the ball path */}
                     {/* --- SETPOINT MARKER (Ghost Ball) --- */}
                     <g style={{ transition: "all 0.1s ease-out" }}>
                         {/* Vertical Guide Line */}
-                        <line
-                            x1={`${toPercent(setpoint)}%`}
-                            y1="10%"
-                            x2={`${toPercent(setpoint)}%`}
-                            y2={`${beamY + 12}%`}
-                            stroke="#f39c12"
-                            strokeWidth="1"
-                            strokeDasharray="2 2"
-                            opacity="0.4"
-                        />
+                        <line x1={`${toPercent(setpoint)}%`} y1="10%" x2={`${toPercent(setpoint)}%`} y2={`${beamY + 12}%`} stroke="#f39c12" strokeWidth="1" strokeDasharray="2 2" opacity="0.4" />
 
                         {/* Ghost Ball (Hollow/Transparent) */}
-                        <circle
-                            cx={`${toPercent(setpoint)}%`}
-                            cy={`${beamY - 12}%`}
-                            r={ballRadius}
-                            fill="rgba(243, 156, 18, 0.2)"
-                            stroke="#f39c12"
-                            strokeWidth="2"
-                            strokeDasharray="4 2"
-                        />
+                        <circle cx={`${toPercent(setpoint)}%`} cy={`${beamY - 12}%`} r={ballRadius} fill="rgba(243, 156, 18, 0.2)" stroke="#f39c12" strokeWidth="2" strokeDasharray="4 2" />
 
                         {/* Center Dot for precision */}
                         <circle cx={`${toPercent(setpoint)}%`} cy={`${beamY - 12}%`} r="2" fill="#f39c12" />
                     </g>
 
                     {/* Ruler Marks */}
-                    {[0, 50, 100, 150, 200, 250, 300].map((mark) => (
+                    {[0, 50, 100, 145, 200, 250, 290].map((mark) => (
                         <g key={mark}>
                             <rect x={`${toPercent(mark)}%`} y={`${beamY + 5}%`} width="1" height="5" fill="#666" transform="translate(-0.5,0)" />
-                            {mark % 100 === 0 && (
+                            {mark % 100 === 0 || mark === 145 || mark === 290 ? (
                                 <text x={`${toPercent(mark)}%`} y={`${beamY + 18}%`} fill="#666" fontSize="10" fontFamily="monospace" textAnchor="middle">
                                     {mark}
                                 </text>
-                            )}
+                            ) : null}
                         </g>
                     ))}
                 </svg>
@@ -162,7 +136,7 @@ export const BeamVisualizer = ({ distance, setpoint, onSetpointChange, min = 0, 
                     <span style={{ margin: "0 8px", color: "#555" }}>|</span>
                     Cel: <strong style={{ color: "#f39c12" }}>{setpoint.toFixed(0)}</strong>
                 </span>
-                <span style={{ color: "var(--text-muted)" }}>300 mm</span>
+                <span style={{ color: "var(--text-muted)" }}>290 mm</span>
             </div>
         </div>
     );

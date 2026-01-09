@@ -1,3 +1,12 @@
+/**
+ ******************************************************************************
+ * @file    pid.h
+ * @author  Piotr Bednarek Jan Andrzejewski Mateusz Banaszak
+ * @date    Jan 8, 2026
+ * @brief   Nagłówek biblioteki regulatora PID (wrapper CMSIS DSP).
+ ******************************************************************************
+ */
+
 #ifndef PID_H
 #define PID_H
 
@@ -10,9 +19,9 @@ extern "C" {
 #include "arm_math.h"
 
 typedef struct {
-    arm_pid_instance_f32 instance;
-    float output_min;
-    float output_max;
+    arm_pid_instance_f32 instance; ///< Struktura wewnętrzna CMSIS DSP
+    float output_min;              ///< Minimalna wartość wyjścia
+    float output_max;              ///< Maksymalna wartość wyjścia
 } PID_Controller_t;
 
 /**
