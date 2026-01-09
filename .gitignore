@@ -1,2 +1,4 @@
 STM/Debug
 STM/.settings
+
+*.pyc

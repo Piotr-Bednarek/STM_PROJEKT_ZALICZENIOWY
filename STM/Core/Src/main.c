@@ -194,46 +194,64 @@ float ServoPID_Compute(ServoPID_Controller *pid, float error, float measurement)
 	pid->Ki = g_Ki;
 	pid->Kd = g_Kd;
 
-	float P = pid->Kp * error;
-
-	// Anti-Windup: Warunkowe całkowanie (Clamping)
-	// Całkujemy tylko wtedy, gdy wyjście NIE jest nasycone LUB gdy błąd działa w stronę "odnasycenia"
-	
-	// Obliczenie hipotetycznego wyjścia (bez nowego I)
-	float tentative_output = SERVO_CENTER + P + (pid->Ki * pid->integral);
-
-	int saturated = 0;
-	if (tentative_output > SERVO_MAX_LIMIT || tentative_output < SERVO_MIN_LIMIT) {
-		saturated = 1;
-	}
-	
-	// Jeśli nie ma nasycenia, lub jeśli błąd ma przeciwny znak niż całka (odwijanie), całkujemy
-	if (!saturated || (error * pid->integral < 0)) {
-		pid->integral += error;
-	}
-	
-	// Twardy limit całki (zabezpieczenie)
-	if (pid->integral > 3000.0f) pid->integral = 3000.0f;
-	if (pid->integral < -3000.0f) pid->integral = -3000.0f;
-    
-	float I = pid->Ki * pid->integral;
-
+    // 1. Obliczamy D (Derivative) najpierw, aby znać jej wpływ na wyjście
 	float D = 0.0f;
-
     float raw_derivative = -(measurement - pid->prevMeasurement);
 	
 	if (raw_derivative > -D_DEADBAND && raw_derivative < D_DEADBAND) {
 		raw_derivative = 0.0f;
 	}
-	
 	float filtered_derivative = EMA_Update(&pid->d_filter, raw_derivative);
-	
 	D = pid->Kd * filtered_derivative;
-	
-	pid->prevMeasurement = measurement;
-	pid->prevError = error;
+    pid->prevMeasurement = measurement; // Update state
 
-	float output = SERVO_CENTER + P + I + D;
+    // 2. Obliczamy P (Proportional)
+	float P = pid->Kp * error;
+
+    // 3. Obliczamy Anti-Windup (Clamping)
+    // Obliczamy wyjście bez nowej całki (używamy starej całki)
+    float old_I = pid->Ki * pid->integral;
+    float tentative_output = SERVO_CENTER + P + old_I + D;
+
+    int saturated = 0;
+    // Sprawdzamy czy to wyjście przekracza limity
+    if (tentative_output > SERVO_MAX_LIMIT) {
+        saturated = 1; // Nasycenie górne
+    } else if (tentative_output < SERVO_MIN_LIMIT) {
+        saturated = -1; // Nasycenie dolne
+    }
+
+    // Decyzja o całkowaniu:
+    // Całkujemy jeśli:
+    // a) Nie ma nasycenia (saturated == 0)
+    // b) Nasycenie jest górne (1), ale błąd * Ki ma znak ujemny (chce zmniejszyć wyjście)
+    // c) Nasycenie jest dolne (-1), ale błąd * Ki ma znak dodatni (chce zwiększyć wyjście)
+    
+    // Uwaga: Znak zmiany całki zależy od znaku (error * Ki). 
+    // Jeśli Ki jest ujemne, to error>0 zmniejsza całkę (ujemny wkład).
+    
+    float integration_contribution = error * pid->Ki;
+    
+    if (saturated == 0) {
+        pid->integral += error;
+    } else if (saturated == 1 && integration_contribution < 0) {
+        // Jesteśmy na MAX limicie, ale sterownik chce zmniejszyć wyjście -> POZWÓL CAŁKOWAĆ
+        pid->integral += error;
+    } else if (saturated == -1 && integration_contribution > 0) {
+        // Jesteśmy na MIN limicie, ale sterownik chce zwiększyć wyjście -> POZWÓL CAŁKOWAĆ
+        pid->integral += error;
+    }
+    
+    // Twardy limit całki (failsafe)
+	if (pid->integral > 3000.0f) pid->integral = 3000.0f;
+	if (pid->integral < -3000.0f) pid->integral = -3000.0f;
+
+    // 4. Finalne wyjście
+    float new_I = pid->Ki * pid->integral;
+    float output = SERVO_CENTER + P + new_I + D;
+    
+    pid->prevError = error;
+
 	return output;
 }
 
@@ -342,6 +360,8 @@ int main(void)
 
 
 	HAL_UART_Transmit(&huart3, (uint8_t*) "VL53L0X Ready! Sending data...\r\n", 32, 100);
+
+    Calibration_Init();
 
 	HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
 
@@ -473,7 +493,7 @@ int main(void)
             static uint8_t cal_throttle = 0;
             cal_throttle++;
             
-            if (cal_throttle >= 5) {
+            if (cal_throttle >= 2) { // Send every 2nd loop (~60ms) for better responsiveness
                 cal_throttle = 0;
                 
     			char cal_buffer[64];

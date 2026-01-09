@@ -93,21 +93,46 @@ CalPoint_t* Calibration_GetPoint(uint8_t index) {
  * @param raw_input Surowy odczyt z czujnika.
  * @return Obliczona rzeczywista pozycja w mm.
  */
+#include <math.h>
+
+/**
+ * @brief Interpoluje surowy odczyt na rzeczywistą odległość.
+ *        Znajduje odpowiedni przedział kalibracyjny i wykonuje interpolację liniową.
+ *        Jeśli wartość wykracza poza zakres kalibracji, jest przycinana do krawędzi (clamping).
+ * @param raw_input Surowy odczyt z czujnika.
+ * @return Obliczona rzeczywista pozycja w mm.
+ */
 float Calibration_Interpolate(float raw_input) {
-	if (raw_input <= cal_table[0].raw_val) return cal_table[0].actual_pos;
-	if (raw_input >= cal_table[4].raw_val) return cal_table[4].actual_pos;
+    int descending = (cal_table[0].raw_val > cal_table[4].raw_val);
+    
+    if (descending) {
+        if (raw_input >= cal_table[0].raw_val) return cal_table[0].actual_pos;
+        if (raw_input <= cal_table[4].raw_val) return cal_table[4].actual_pos;
+    } else {
+        if (raw_input <= cal_table[0].raw_val) return cal_table[0].actual_pos;
+        if (raw_input >= cal_table[4].raw_val) return cal_table[4].actual_pos;
+    }
 
 	for (int i = 0; i < 4; i++) {
-		if (raw_input >= cal_table[i].raw_val && raw_input <= cal_table[i+1].raw_val) {
-
-			float range_x = cal_table[i+1].raw_val - cal_table[i].raw_val;
+        float r1 = cal_table[i].raw_val;
+        float r2 = cal_table[i+1].raw_val;
+        
+        float min_r = (r1 < r2) ? r1 : r2;
+        float max_r = (r1 < r2) ? r2 : r1;
+        
+		if (raw_input >= min_r && raw_input <= max_r) {
+			float range_x = r2 - r1;
 			float range_y = cal_table[i+1].actual_pos - cal_table[i].actual_pos;
 
-			if (range_x < 0.1f) return cal_table[i].actual_pos;
+			if (fabsf(range_x) < 0.001f) return cal_table[i].actual_pos;
 
-			float ratio = (raw_input - cal_table[i].raw_val) / range_x;
+			float ratio = (raw_input - r1) / range_x;
 			return cal_table[i].actual_pos + (ratio * range_y);
 		}
 	}
-	return raw_input;
+    
+    if (fabsf(raw_input - cal_table[0].raw_val) < fabsf(raw_input - cal_table[4].raw_val))
+        return cal_table[0].actual_pos;
+    else
+        return cal_table[4].actual_pos;
 }
