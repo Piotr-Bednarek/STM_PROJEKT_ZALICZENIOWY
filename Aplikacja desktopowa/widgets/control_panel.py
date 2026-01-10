@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QSlider, QHBoxLayout, 
-                               QPushButton, QButtonGroup, QGridLayout, QFrame)
+                               QPushButton, QButtonGroup, QGridLayout, QFrame, QRadioButton)
 from PySide6.QtCore import Qt, Signal, QTimer
 from widgets.beam_visualizer import BeamVisualizer
 
@@ -72,6 +72,7 @@ class ControlPanel(QWidget):
     kd_update = Signal(float)
     setpoint_update = Signal(float)
     calibration_update = Signal(int, float, float) # index, raw, target
+    mode_update = Signal(int) # 0=GUI, 1=Analog
     
     def __init__(self):
         super().__init__()
@@ -88,7 +89,33 @@ class ControlPanel(QWidget):
         title = QLabel("Panel Sterowania")
         title.setProperty("class", "panel-title")
         title.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
         self.layout.addWidget(title)
+        
+        # --- Source Selection ---
+        source_frame = QFrame()
+        source_frame.setStyleSheet("background-color: rgba(255,255,255,0.05); border-radius: 6px; padding: 4px;")
+        source_layout = QHBoxLayout(source_frame)
+        source_layout.setContentsMargins(10, 5, 10, 5)
+        
+        lbl_source = QLabel("Źródło:")
+        lbl_source.setStyleSheet("font-weight: bold; color: #ccc;")
+        
+        self.rb_gui = QRadioButton("GUI (Suwak)")
+        self.rb_gui.setChecked(True)
+        self.rb_analog = QRadioButton("Potencjometr")
+        
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.addButton(self.rb_gui, 0)
+        self.mode_group.addButton(self.rb_analog, 1)
+        self.mode_group.idClicked.connect(self.mode_update.emit)
+        
+        source_layout.addWidget(lbl_source)
+        source_layout.addStretch()
+        source_layout.addWidget(self.rb_gui)
+        source_layout.addWidget(self.rb_analog)
+        
+        self.layout.addWidget(source_frame)
         
         # --- Beam Visualizer ---
         self.viz = BeamVisualizer()

@@ -3,7 +3,7 @@ from PySide6.QtGui import QPainter, QBrush, QPen, QColor, QLinearGradient, QRadi
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF
 
 class BeamVisualizer(QWidget):
-    setpoint_changed = Signal(float)
+    setpoint_changed = Signal(int)
     
     def __init__(self):
         super().__init__()
@@ -12,6 +12,7 @@ class BeamVisualizer(QWidget):
         self.setpoint = 150
         self.min_val = 0
         self.max_val = 290
+        self.margin = 25  # Space on left and right
         
         self.is_dragging = False
         
@@ -35,10 +36,13 @@ class BeamVisualizer(QWidget):
             
     def _update_from_mouse(self, x):
         width = self.width()
-        # Map x to 0-290
-        val = (x / width) * (self.max_val - self.min_val) + self.min_val
+        effective_width = width - 2 * self.margin
+        if effective_width <= 0: return
+        
+        # Map x to 0-290 relative to margins
+        val = ((x - self.margin) / effective_width) * (self.max_val - self.min_val) + self.min_val
         val = max(self.min_val, min(val, self.max_val))
-        self.setpoint_changed.emit(val)
+        self.setpoint_changed.emit(int(val))
         
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -58,7 +62,8 @@ class BeamVisualizer(QWidget):
         
         painter.setBrush(QBrush(grad))
         painter.setPen(Qt.NoPen)
-        painter.drawRoundedRect(0, beam_y, w, beam_h, 2, 2)
+        # Draw beam spanning from margin to w-margin
+        painter.drawRoundedRect(self.margin, beam_y, w - 2 * self.margin, beam_h, 2, 2)
         
         # Pivot Triangle
         pivot_path = [
@@ -66,14 +71,13 @@ class BeamVisualizer(QWidget):
             (w * 0.48, h * 0.9),
             (w * 0.52, h * 0.9)
         ]
-        # (Simplified drawing for pivot not strictly needed but looks nice)
         painter.setBrush(QColor("#555555"))
         painter.drawPolygon([QPointF(*p) for p in pivot_path])
         
         # --- Helper: map mm to px ---
         def mm_to_px(mm):
             pct = (mm - self.min_val) / (self.max_val - self.min_val)
-            return pct * w
+            return self.margin + pct * (w - 2 * self.margin)
             
         # --- Ruler Marks ---
         marks = [0, 50, 100, 145, 200, 250, 290]
@@ -84,7 +88,7 @@ class BeamVisualizer(QWidget):
             x_pos = mm_to_px(m)
             painter.drawLine(int(x_pos), int(beam_y + 10), int(x_pos), int(beam_y + 15))
             if m % 100 == 0 or m in [145, 290]:
-                painter.drawText(QRectF(x_pos - 15, beam_y + 18, 30, 15), Qt.AlignCenter, str(m))
+                painter.drawText(QRectF(x_pos - 20, beam_y + 18, 40, 15), Qt.AlignCenter, str(m))
                 
         # --- Ball ---
         ball_radius = 15
@@ -122,11 +126,6 @@ class BeamVisualizer(QWidget):
         painter.drawRoundedRect(info_rect, 4, 4)
         
         # Text
-        # Simplified manual text drawing for "Aktualnie: ... Cel: ..."
-        # For brevity, we trust the side labels or just drawing it centered
-        # Qt's HTML text drawing is tricky inside paintEvent without QTextDocument, 
-        # so let's stick to simple text
-        
         painter.setPen(QColor("#cccccc"))
         painter.setFont(QFont("Segoe UI", 9))
         text = f"Aktualnie: {self.distance:.0f} mm   |   Cel: {self.setpoint:.0f} mm"

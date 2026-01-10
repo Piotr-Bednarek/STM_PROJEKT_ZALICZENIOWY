@@ -48,7 +48,7 @@ class MetricsPanel(QWidget):
         self.card_dist = MetricCard("Dystans (Raw)", "mm", "#22c55e")
         self.card_filt = MetricCard("Dystans (Filtrowany)", "mm", "#3b82f6")
         self.card_err = MetricCard("Uchyb (Błąd)", "mm", "#ef4444")
-        self.card_avg_err = MetricCard("Śr. Uchyb (25)", "%", "#f59e0b")
+        self.card_avg_err = MetricCard("Śr. Uchyb (35)", "%", "#f59e0b")
         
         # Row 2 equivalent (merged into single row for desktop width)
         self.card_freq = MetricCard("Częstotliwość", "Hz", "#94a3b8")
@@ -80,4 +80,5 @@ class MetricsPanel(QWidget):
         self.card_freq.update_value(f"{data.get('freq', 0)}")
         self.card_angle.update_value(f"{data.get('control', 0):.0f}")
         
+        self.card_avg_err.update_value(f"{computed.get('avgErrorPercent', 0)}")
         self.card_std.update_value(f"{computed.get('stdDev', 0)}")

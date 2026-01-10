@@ -59,6 +59,16 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define LED_ERR_1_Pin GPIO_PIN_2
+#define LED_ERR_1_GPIO_Port GPIOE
+#define LED_ERR_2_Pin GPIO_PIN_3
+#define LED_ERR_2_GPIO_Port GPIOE
+#define LED_ERR_3_Pin GPIO_PIN_4
+#define LED_ERR_3_GPIO_Port GPIOE
+#define LED_ERR_4_Pin GPIO_PIN_5
+#define LED_ERR_4_GPIO_Port GPIOE
+#define LED_ERR_5_Pin GPIO_PIN_6
+#define LED_ERR_5_GPIO_Port GPIOE
 #define USER_Btn_Pin GPIO_PIN_13
 #define USER_Btn_GPIO_Port GPIOC
 #define MCO_Pin GPIO_PIN_0
@@ -119,7 +129,17 @@ void Error_Handler(void);
 #define LD2_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
+// --- LED Error Bar ---
+#define LED_ERR_PORT      GPIOE
+#define LED_ERR_1_Pin     GPIO_PIN_2
+#define LED_ERR_2_Pin     GPIO_PIN_3
+#define LED_ERR_3_Pin     GPIO_PIN_4
+#define LED_ERR_4_Pin     GPIO_PIN_5
+#define LED_ERR_5_Pin     GPIO_PIN_6
+#define LED_ERR_6_Pin     GPIO_PIN_7
+#define LED_ERR_7_Pin     GPIO_PIN_8
+#define LED_ERR_8_Pin     GPIO_PIN_9
+#define LED_ERR_9_Pin     GPIO_PIN_10
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

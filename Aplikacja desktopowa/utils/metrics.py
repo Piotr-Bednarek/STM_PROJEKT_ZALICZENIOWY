@@ -19,17 +19,21 @@ def calculate_metrics(history):
         }
 
     # Take last 25 samples for short-term stats (consistent with web app)
-    recent_data = history[-25:]
+    recent_data = history[-35:]
     
     errors = [abs(d['error']) for d in recent_data]
     setpoints = [d['setpoint'] for d in recent_data]
     distances = [d['filtered'] for d in recent_data]
     
     # Calculate Mean
-    avg_error = sum(errors) / len(errors)
-    avg_setpoint = sum(setpoints) / len(setpoints) if len(setpoints) > 0 else 0
-    
-    avg_error_percent = (avg_error / avg_setpoint * 100) if avg_setpoint > 0 else 0
+    if recent_data and "avg_error" in recent_data[-1]:
+         avg_error = recent_data[-1]["avg_error"]
+    else:
+         avg_error = sum(errors) / len(errors) if errors else 0.0
+         
+    # avg_error_percent = (avg_error / avg_setpoint * 100) if avg_setpoint > 0 else 0
+    # User requested % of full range (290mm)
+    avg_error_percent = (avg_error / 290.0) * 100.0
     
     # Calculate StdDev
     # std = sqrt(mean(abs(x - x.mean())**2))
@@ -43,6 +47,7 @@ def calculate_metrics(history):
     
     return {
         "avgErrorPercent": round(avg_error_percent, 1),
+        "avgError": round(avg_error, 1),
         "stdDev": round(std_dev, 1),
         "minDistance": min(distances),
         "maxDistance": max(distances)

@@ -91,6 +91,7 @@ class MainWindow(QMainWindow):
         
         self.control_panel.setpoint_update.connect(self.serial.send_setpoint)
         self.control_panel.calibration_update.connect(self.serial.send_calibration)
+        self.control_panel.mode_update.connect(self.serial.send_control_mode)
         
         # Connection Tile Interactions
         self.btn_refresh.clicked.connect(self.serial.list_ports)

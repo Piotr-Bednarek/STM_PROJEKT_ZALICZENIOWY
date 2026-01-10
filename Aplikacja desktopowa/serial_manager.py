@@ -150,12 +150,16 @@ class SerialManager(QObject):
         QThread.msleep(500)
         self.send_pid_d(kd)
         
-    def send_pid_p(self, val): self.send_command(f"P:{-val:.4f}")
-    def send_pid_i(self, val): self.send_command(f"I:{-val:.5f}")
-    def send_pid_d(self, val): self.send_command(f"D:{-val:.1f}")
+    def send_pid_p(self, val): self.send_command(f"P:{val:.4f}")
+    def send_pid_i(self, val): self.send_command(f"I:{val:.5f}")
+    def send_pid_d(self, val): self.send_command(f"D:{val:.1f}")
     
     def send_calibration(self, index, raw, target):
         self.send_command(f"CAL{index}:{raw:.1f},{target:.1f}")
+        
+    def send_control_mode(self, mode):
+        # mode: 0 = GUI, 1 = Analog
+        self.send_command(f"M:{mode}")
 
     @Slot(str)
     def handle_line(self, line):
@@ -213,6 +217,12 @@ class SerialManager(QObject):
                     except: pass
                 elif seg.startswith("A:"):
                     try: val = float(seg[2:]); current_data["control"] = val
+                    except: pass
+                elif seg.startswith("V:"):
+                    try: val = float(seg[2:]); current_data["avg_error"] = val
+                    except: pass
+                elif seg.startswith("Z:"):
+                    try: val = float(seg[2:]); current_data["setpoint"] = val
                     except: pass
             
             self.last_data = current_data
