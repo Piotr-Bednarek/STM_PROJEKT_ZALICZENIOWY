@@ -107,7 +107,7 @@ Całkowita transmitancja układu (od sygnału sterującego $U(s)$ do pozycji kul
 
 Podstawiając wartości liczbowe:
 \begin{equation}
-  G_{\mathrm{total}}(s) = \frac{0{,}2\times 5{,}886}{0{,}095\,s^3 + s^2}
+  G_{\mathrm{total}}(s) = \frac{0{,}2\cdot 5{,}886}{0{,}095\,s^3 + s^2}
   = \frac{1{,}177}{0{,}095\,s^3 + s^2}.
 \end{equation}
 
@@ -145,8 +145,10 @@ i~danych katalogowych serwomechanizmu.
   \end{tabular}
 \end{table}
 
+TODO dokonczyc te sekcje!!!
+
 % -----------------------------------------------------------------------
-\section{Projekt regulatora}
+\section{Projekt regulatora LQR}
 % -----------------------------------------------------------------------
 
 \subsection{Opis przestrzeni stanów}
@@ -220,23 +222,6 @@ Macierz obserwowalności $\mathcal{O} = [C;\;CA;\;CA^2]^T$:
 Rząd wynosi~3, układ jest \textbf{w~pełni obserwowalny} — wszystkie stany
 można zrekonstruować z~pomiaru pozycji kulki $x$.
 
-\subsection{Regulator PID}
-
-W~firmware mikrokontrolera zaimplementowano klasyczny regulator PID
-z~następującymi modyfikacjami:
-\begin{itemize}
-  \item \textbf{pochodna na pomiarze} — różniczkowanie sygnału wyjścia
-        (nie uchybu), co eliminuje skok pochodnej przy zmianie wartości zadanej;
-  \item \textbf{anti-windup} (ograniczenie członu całkującego) — zapobiega
-        nasyceniu członu~I przy wysyceniu wyjścia;
-  \item \textbf{dyskretyzacja} — metoda prostokątów (Euler przód)
-        z~krokiem $T_s = 30\,\mathrm{ms}$.
-\end{itemize}
-
-Nastawy regulatora PID ($K_p$, $K_i$, $K_d$) dobierane są iteracyjnie
-i~przesyłane do mikrokontrolera w~czasie rzeczywistym przez aplikację
-desktopową bez konieczności ponownego programowania układu.
-
 \subsection{Regulator LQR}
 
 Regulator LQR (\textit{Linear Quadratic Regulator}) minimalizuje wskaźnik
@@ -253,13 +238,23 @@ Sygnał sterujący wyznaczany jest jako:
   u = -\mathbf{K}\,\mathbf{x} = -[K_1\;K_2\;K_3]\begin{bmatrix} x \\ \dot{x} \\ \theta \end{bmatrix}.
 \end{equation}
 
-% -----------------------------------------------------------------------
-\section{Symulacja układu regulacji}
-% -----------------------------------------------------------------------
+TODO dodac jakies przykladowe macierze Q i R / skrypt w pythonie gdzie to liczyliśmy 
 
-Model układu w~przestrzeni stanów~\eqref{eq:statespace} zaimplementowano
-w~środowisku MATLAB/Simulink (plik \texttt{5-matlab/ballonbeam\_matlab1.slx}).
-Model posłużył do wstępnego doboru nastaw regulatorów przed weryfikacją
-eksperymentalną na rzeczywistym stanowisku.
-Szczegółowe wyniki symulacji porównawczych (PID vs.\ LQR) stanowią
-uzupełnienie niniejszej pracy.
+\section{Projekt regulatora PID}
+
+W~firmware mikrokontrolera zaimplementowano klasyczny regulator PID
+z~następującymi modyfikacjami:
+\begin{itemize}
+  \item \textbf{pochodna na pomiarze} — różniczkowanie sygnału wyjścia
+        (nie uchybu), co eliminuje skok pochodnej przy zmianie wartości zadanej;
+  \item \textbf{anti-windup} (ograniczenie członu całkującego) — zapobiega
+        nasyceniu członu~I przy wysyceniu wyjścia;
+  \item \textbf{dyskretyzacja} — metoda prostokątów (Euler przód)
+        z~krokiem $T_s = 30\,\mathrm{ms}$.
+\end{itemize}
+
+TODO uzasadnic dlaczego pochodna na pomiarze i dokonczyć ten rozdzial task @Banaszak !!!!!!!
+
+Nastawy regulatora PID ($K_p$, $K_i$, $K_d$) dobierane są iteracyjnie
+i~przesyłane do mikrokontrolera w~czasie rzeczywistym przez aplikację
+desktopową bez konieczności ponownego programowania układu.

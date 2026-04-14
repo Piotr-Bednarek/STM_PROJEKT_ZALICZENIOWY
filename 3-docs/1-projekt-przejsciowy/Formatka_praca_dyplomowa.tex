@@ -171,20 +171,20 @@ Poznań, \the\year
     pozycją kulki na belce (\textit{ball and beam}) z~wykorzystaniem mikrokontrolera
     STM32F767ZI.
     Opisano budowę mechaniczną stanowiska, zastosowane peryferia (serwomechanek
-    MG946R, czujnik odległości VL53L0X, rząd diod LED, potencjometr) oraz
+    MG946R, kamera systemu wizyjnego, potencjometr) oraz
     architekturę oprogramowania opartą na systemie FreeRTOS.
     Wyprowadzono model matematyczny układu i~zaprojektowano dwa regulatory:
     klasyczny PID z~anti-windup oraz optymalny LQR w~przestrzeni stanów.
     Aplikacja nadzorcza napisana w~Pythonie (PySide6) umożliwia wizualizację
     sygnałów w~czasie rzeczywistym, zapis danych do pliku CSV oraz zdalne
     strojenie regulatora.
-    Przeprowadzono weryfikację eksperymentalną i~potwierdzono spełnienie
-    wszystkich wymagań projektowych.
+    Przeprowadzono weryfikację eksperymentalną i~potwierdzono zgodność zachowania fizycznego
+    systemu z wyznaczonym modelem.
     }
     \vspace*{1\baselineskip}
 
     \noindent{\bf Słowa kluczowe}: {\itshape regulacja automatyczna, kulka na belce,
-    STM32, PID, LQR, FreeRTOS, VL53L0X.}
+    STM32, PID, LQR, FreeRTOS, systemy wizyjne.}
     \par
     \vspace{4\baselineskip}
 
@@ -197,19 +197,19 @@ Poznań, \the\year
     {\itshape
     This thesis presents the design and construction of an autonomous ball-and-beam
     control system based on the STM32F767ZI microcontroller.
-    The mechanical setup, hardware peripherals (MG946R servo, VL53L0X time-of-flight
-    sensor, LED bar, potentiometer), and FreeRTOS-based software architecture are
+    The mechanical setup, hardware peripherals (MG946R servo, computer vision camera
+    , potentiometer), and FreeRTOS-based software architecture are
     described.
     A mathematical model of the plant is derived and two controllers are designed:
     a classical PID with anti-windup and an optimal LQR state-feedback controller.
     A supervisory desktop application (Python/PySide6) provides real-time signal
     visualisation, CSV data logging, and remote parameter tuning.
-    Experimental verification confirms that all project requirements are satisfied.
+    Experimental verification confirms that physical system behaves the same as the theoretical model.
     }
     \vspace*{1\baselineskip}
 
     \noindent{\bf Key words}: {\itshape automatic control, ball and beam, STM32, PID,
-    LQR, FreeRTOS, VL53L0X.}
+    LQR, FreeRTOS, computer vision.}
 
 \end{titlepage}
 

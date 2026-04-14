@@ -12,11 +12,10 @@ sterującego — firmware mikrokontrolera i~aplikację nadzorczą.
 % -----------------------------------------------------------------------
 
 Stanowisko składa się z~wydrukowanej w~technologii 3D pochyłej belki, po której
-swobodnie toczy się metalowy walec (kulka).
+swobodnie toczy się kulka (pileczka ping pongowa).
 Kąt nachylenia belki kontrolowany jest przez serwomechanek połączony z~belką
 za pomocą dźwigni.
-Pozycja kulki mierzona jest bezdotykowo za pomocą czujnika odległości ToF
-zamontowanego na końcu belki.
+Pozycja kulki mierzona jest bezdotykowo za pomocą zaimplementowanego systemu wizyjnego.
 Mikrokontroler STM32 odczytuje pomiar z~czujnika, oblicza sygnał sterujący
 i~generuje odpowiedni sygnał PWM dla serwa.
 
@@ -39,7 +38,7 @@ i~generuje odpowiedni sygnał PWM dla serwa.
     \midrule
     Mikrokontroler & STM32 Nucleo F767ZI & --- \\
     Serwomechanek  & TowerPro MG946R      & PWM 50\,Hz \\
-    Czujnik odległości & Grove VL53L0X ToF & I\textsuperscript{2}C \\
+    Kamera & TODO & UART? \\
     Potencjometr   & liniowy & ADC (PA0) \\
     Zasilacz       & 5\,V DC & --- \\
     \bottomrule
@@ -79,20 +78,9 @@ zabezpieczenia mechaniki.
   \caption{Serwomechanek TowerPro MG946R}
 \end{figure}
 
-\subsection{Czujnik odległości VL53L0X}
+\subsection{Kamera systemu wizyjnego}
 
-Pozycja kulki mierzona jest czujnikiem VL53L0X~\cite{vl53l0x} firmy
-STMicroelectronics, pracującym w~technologii Time-of-Flight (ToF).
-Czujnik emituje krótkie impulsy laserowe podczerwieni i~mierzy czas
-powrotu odbitego sygnału, co pozwala wyznaczyć odległość z~rozdzielczością
-1\,mm w~zakresie do 2\,m.
-Komunikacja z~mikrokontrolerem odbywa się przez magistralę I\textsuperscript{2}C.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.4\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/sensor.png}
-  \caption{Czujnik odległości Grove VL53L0X Time-of-Flight}
-\end{figure}
+TODO!!!!!!!!!
 
 \subsection{Potencjometr}
 
@@ -142,7 +130,7 @@ wątków (tasków):
 
 \subsection{Aplikacja desktopowa}
 
-Aplikacja nadzorcza napisana jest w~języku Python~3 z~wykorzystaniem
+Aplikacja nadzorcza napisana jest w~języku Python z~wykorzystaniem
 frameworka PySide6 (Qt~6).
 Zapewnia ona:
 \begin{itemize}
@@ -160,6 +148,8 @@ Zapewnia ona:
   \label{fig:desktop}
 \end{figure}
 
+TODO jeszcze jeden figure pokazujący jak wyglada okno z wizji!!!!!!
+
 % -----------------------------------------------------------------------
 \section{Implementacja algorytmu sterowania}
 % -----------------------------------------------------------------------
@@ -167,7 +157,7 @@ Zapewnia ona:
 \subsection{Pętla sterowania i okres próbkowania}
 
 Algorytm sterowania realizowany jest przez \texttt{ControlTask} z~ustalonym
-okresem próbkowania 30\,ms wymuszonym przez funkcję \texttt{osDelay()}:
+okresem próbkowania 30\,ms????TODO wymuszonym przez funkcję \texttt{osDelay()}:
 
 \begin{lstlisting}[style=cstyle, caption={Stały okres próbkowania w pętli sterowania (main.c)}]
 #define PID_DT_MS 30
@@ -237,4 +227,8 @@ ControlTaskHandle = osThreadCreate(osThread(ControlTask), NULL);
 
 osKernelStart();
 \end{lstlisting}
+
+\section{System wizyjny}
+
+TODO task @piotr !!!!
 
