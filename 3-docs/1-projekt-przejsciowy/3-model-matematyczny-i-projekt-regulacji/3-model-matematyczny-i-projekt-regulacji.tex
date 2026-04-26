@@ -51,7 +51,7 @@ a równanie momentu obrotowego wokół osi kulki:
   T \cdot R = J\,\ddot{\alpha},
 \end{equation}
 gdzie $T$ — siła tarcia statycznego, $R$ — promień kulki, $J$ — moment bezwładności,
-$\ddot\alpha$ — przyspieszenie kątowe kulki.
+$\varepsilon = \ddot\alpha$ — przyspieszenie kątowe kulki.
 
 \subsubsection{Warunek toczenia bez poślizgu}
 
@@ -62,9 +62,10 @@ Z~warunku $\ddot x = \ddot\alpha\cdot R$ eliminuje się siłę tarcia:
   \ddot{x} = \frac{g\sin\theta}{1 + J/(mR^2)}.
 \end{equation}
 
-Dla małych kątów $\sin\theta\approx\theta$, a~dla walcowej kulki
+Dla małych kątów $\sin\theta\approx\theta$, a~dla kulki
 $J = \tfrac{2}{3}mR^2$, stąd:
 \begin{equation}
+  \label{eq:ball_dyn}
   \ddot{x} = \underbrace{\frac{g}{1 + 2/3}}_{c_{\mathrm{ball}}} \cdot\theta
   = 0{,}6\,g\cdot\theta.
 \end{equation}
@@ -76,7 +77,7 @@ Stała dynamiki kulki wynosi:
 
 \subsubsection{Transmitancja kulki na belce}
 
-Po zastosowaniu transformaty Laplace'a (zerowe warunki początkowe):
+Po zastosowaniu względem \ref{eq:ball_dyn} transformaty Laplace'a (zerowe warunki początkowe) otrzymuje się:
 \begin{equation}
   G_{\mathrm{ball}}(s) = \frac{X(s)}{\Theta_{\mathrm{beam}}(s)} = \frac{c_{\mathrm{ball}}}{s^2}.
 \end{equation}
@@ -208,7 +209,9 @@ możliwe jest zaprojektowanie efektywnego regulatora stanu (LQR).
 
 \subsection{Obserwowalność}
 
-Macierz obserwowalności $\mathcal{O} = [C;\;CA;\;CA^2]^T$:
+Macierz obserwowalności $\mathcal{O} = \begin{bmatrix}
+  C\\CA\\CA^2
+\end{bmatrix}$
 
 \begin{equation}
   \mathcal{O} = \begin{bmatrix}
@@ -227,18 +230,22 @@ można zrekonstruować z~pomiaru pozycji kulki $x$.
 Regulator LQR (\textit{Linear Quadratic Regulator}) minimalizuje wskaźnik
 jakości kwadratowej:
 \begin{equation}
-  J = \int_0^\infty \left( \mathbf{x}^T Q\,\mathbf{x} + u^T R\,u \right) dt,
+  J = \int_0^\infty \left( \mathbf{e}^T Q\,\mathbf{e} + u^T R\,u \right) dt,
 \end{equation}
-gdzie macierze wag $Q$ (penalizacja stanów) i~$R$ (penalizacja wejścia)
-dobrano metodą iteracyjną w~środowisku MATLAB/Simulink.
+gdzie $\mathbf{e} = \mathbf{x} - \mathbf{x}_\mathrm{ref}$ jest wektorem uchybu stanu,
+a~$\mathbf{x}_\mathrm{ref} = [r,\;0,\;0]^T$ odpowiada zadanej pozycji kulki~$r$,
+zerowej prędkości i~zerowemu kątowi belki.
+
+TODO dodac jakies przykladowe macierze Q i R / skrypt w pythonie gdzie to liczyliśmy 
+musi to byc w tym miejscu
+
 Uzyskany wektor wzmocnień $\mathbf{K}$ przeniesiono bezpośrednio do modułu
 \texttt{lqr.c} firmware.
 Sygnał sterujący wyznaczany jest jako:
 \begin{equation}
-  u = -\mathbf{K}\,\mathbf{x} = -[K_1\;K_2\;K_3]\begin{bmatrix} x \\ \dot{x} \\ \theta \end{bmatrix}.
+  u = -\mathbf{K}\,\mathbf{e} = -[K_1\;K_2\;K_3]\begin{bmatrix} x - r \\ \dot{x} \\ \theta \end{bmatrix}.
 \end{equation}
 
-TODO dodac jakies przykladowe macierze Q i R / skrypt w pythonie gdzie to liczyliśmy 
 
 \section{Projekt regulatora PID}
 

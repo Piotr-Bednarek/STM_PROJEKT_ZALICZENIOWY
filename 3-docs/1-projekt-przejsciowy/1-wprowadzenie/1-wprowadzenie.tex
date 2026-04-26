@@ -16,7 +16,7 @@ Celem niniejszej pracy jest zaprojektowanie i zbudowanie autonomicznego stanowis
 sterowania kulką na belce opartego na mikrokontrolerze STM32F767ZI \cite{stm32f767zi}
 oraz zaimplementowanie i porównanie dwóch algorytmów regulacji:
 \begin{itemize}
-  \item regulatora \textbf{PID} z filtrem pochodnej, członem anti-windup i strojeniem
+  \item regulatora \textbf{PID} (\textit{Proportional-Integral-Derivative Regulator} )z filtrem pochodnej, członem anti-windup i strojeniem
         w~oparciu o odpowiedź skokową i sygnał APRBS,
   \item regulatora \textbf{LQR} (\textit{Linear Quadratic Regulator}) w~przestrzeni stanów
         z~wektorem stanu obejmującym pozycję kulki, jej prędkość oraz kąt belki.
@@ -24,10 +24,10 @@ oraz zaimplementowanie i porównanie dwóch algorytmów regulacji:
 
 Zakres pracy obejmuje:
 \begin{enumerate}[(i)]
+      \item budowę stanowiska laboratoryjnego z systemem wizyjnym \cite{vl53l0x}
+        i serwomechanizmem MG90S,
   \item identyfikację modelu matematycznego obiektu metodami doświadczalnymi,
   \item projektowanie i dobór nastaw regulatorów PID oraz LQR,
-  \item budowę stanowiska laboratoryjnego z czujnikiem ToF VL53L0X \cite{vl53l0x}
-        i serwomechanizmem MG90S,
   \item implementację algorytmów w środowisku FreeRTOS na platformie STM32,
   \item opracowanie aplikacji nadzorczej w języku Python~(PySide6) z podglądem
         kamery i detekcją pozycji kulki metodami wizji komputerowej \cite{kadam2024object},
@@ -50,10 +50,7 @@ Wśród klasycznych podejść do sterowania układem dominuje regulator PID.
 Taifour Ali i~in. \cite{taifour2017design} przedstawili implementację dwupętlowego
 regulatora PID na mikrokontrolerze Arduino z ultradźwiękowym czujnikiem odległości
 i serwomechanizmem DC.
-Autorzy potwierdzili skuteczność ręcznego doboru nastaw metodą prób i błędów,
-uzyskując stabilizację z minimalnymi oscylacjami przy $K_p{=}4$, $K_i{=}1$, $K_d{=}2$.
-W pracy wykazano, że dołączenie członu całkującego istotnie redukuje uchyb ustalony,
-a pochodna skraca czas regulacji i tłumi przeregulowania.
+Autorzy potwierdzili skuteczność ręcznego doboru nastaw metodą prób i błędów.
 
 Projektowanie optymalnych regulatorów stanu wymaga solidnych podstaw teoretycznych.
 Ogata \cite{ogata2010modern} oraz Franklin i~in. \cite{franklin2014feedback} dostarczają

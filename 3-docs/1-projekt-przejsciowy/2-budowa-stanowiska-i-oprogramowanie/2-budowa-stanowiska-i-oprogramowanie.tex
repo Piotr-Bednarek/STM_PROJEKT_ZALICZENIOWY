@@ -12,14 +12,14 @@ sterującego — firmware mikrokontrolera i~aplikację nadzorczą.
 % -----------------------------------------------------------------------
 
 Stanowisko składa się z~wydrukowanej w~technologii 3D pochyłej belki, po której
-swobodnie toczy się kulka (pileczka ping pongowa).
+swobodnie toczy się kulka (pileczka ping pongowa) \ref{fig:stanowisko}.
 Kąt nachylenia belki kontrolowany jest przez serwomechanek połączony z~belką
 za pomocą dźwigni.
 Pozycja kulki mierzona jest bezdotykowo za pomocą zaimplementowanego systemu wizyjnego.
 Mikrokontroler STM32 odczytuje pomiar z~czujnika, oblicza sygnał sterujący
-i~generuje odpowiedni sygnał PWM dla serwa.
+i~generuje odpowiedni sygnał PWM dla serwomechanizmu.
 
-\begin{figure}[H]
+\begin{figure}
   \centering
   \includegraphics[width=0.8\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/stanowisko.png}
   \caption{Stanowisko laboratoryjne układu kulka na belce}
@@ -27,6 +27,8 @@ i~generuje odpowiedni sygnał PWM dla serwa.
 \end{figure}
 
 \subsection{Wykaz komponentów}
+
+Komponenty wykorzystane przy budowie stanowiska zestawiono w tabeli \ref{tab:komponenty}.
 
 \begin{table}[H]
   \centering
@@ -49,9 +51,9 @@ i~generuje odpowiedni sygnał PWM dla serwa.
 \section{Mikrokontroler STM32 i peryferia}
 % -----------------------------------------------------------------------
 
-\subsection{Mikrokontroler STM32F767ZI}
+\paragraph{Mikrokontroler STM32F767ZI}
 
-Głównym procesorem stanowiska jest mikrokontroler STM32F767ZI~\cite{stm32f767zi}
+Głównym procesorem stanowiska jest mikrokontroler STM32F767ZI~\cite{stm32f767zi} \ref{fig:stm}
 zamontowany na płytce ewaluacyjnej Nucleo-F767ZI.
 Układ oparty jest na rdzeniu ARM Cortex-M7 taktowanym z~częstotliwością 216\,MHz
 i~wyposażony jest w~bogatą gamę peryferiów: kilka interfejsów I\textsuperscript{2}C
@@ -61,12 +63,12 @@ i UART, timery sprzętowe, przetwornik ADC oraz obsługę sygnałów PWM.
   \centering
   \includegraphics[width=0.45\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/plytka.png}
   \caption{Płytka ewaluacyjna STM32 Nucleo-F767ZI}
+  \label{fig:stm}
 \end{figure}
 
-\subsection{Serwomechanek MG946R}
+\paragraph{Serwomechanizm MG946R}
 
-Do sterowania kątem belki zastosowano serwomechanek TowerPro MG946R.
-Serwo przyjmuje sygnał PWM o~częstotliwości 50\,Hz i~czasie wypełnienia
+Do sterowania kątem belki zastosowano serwomechanizm TowerPro MG946R \ref{fig:serwo} które, przyjmuje sygnał PWM o~częstotliwości 50\,Hz i~czasie wypełnienia
 od 1\,ms (pełne wychylenie w~jedną stronę) do 2\,ms (pełne wychylenie
 w~drugą stronę).
 Zakres roboczy ograniczony jest w~oprogramowaniu do 60--140° w~celu
@@ -76,9 +78,10 @@ zabezpieczenia mechaniki.
   \centering
   \includegraphics[width=0.35\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/servo.png}
   \caption{Serwomechanek TowerPro MG946R}
+  \label{fig:serwo}
 \end{figure}
 
-\subsection{Kamera systemu wizyjnego}
+\paragraph{Kamera systemu wizyjnego}
 
 Do rejestracji obrazu zastosowano kamerę USB o~rozdzielczości 640$\times$480 pikseli
 pracującą z~częstotliwością 30 klatek na sekundę.
@@ -88,7 +91,9 @@ Obraz pozyskiwany jest przez bibliotekę OpenCV za pomocą interfejsu
 \texttt{cv2.VideoCapture}, a~aplikacja umożliwia wybór indeksu kamery
 z~listy rozwijanej w~panelu wizyjnym.
 
-\subsection{Potencjometr}
+TODO fotka kamery 
+
+\paragraph{Potencjometr}
 
 Potencjometr liniowy podłączony do wejścia analogowego PA0 (ADC1\_CH0)
 umożliwia ręczne zadawanie wartości referencyjnej pozycji kulki
