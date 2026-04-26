@@ -158,7 +158,7 @@ Jako wektor stanu przyjęto trzy fizycznie mierzalne wielkości:
 \begin{equation}
   \mathbf{x} = \begin{bmatrix} x \\ \dot{x} \\ \theta \end{bmatrix},
 \end{equation}
-gdzie $x$ — pozycja kulki, $\dot{x}$ — prędkość kulki, $\theta$ — kąt serwa (belki).
+gdzie $x$ — pozycja kulki, $\dot{x}$ — prędkość kulki, $\theta$ — kąt belki.
 
 Wyprowadzając równania różniczkowe z~bloków transmitancyjnych, otrzymuje się model
 przestrzeni stanów w~postaci $\dot{\mathbf{x}} = A\mathbf{x} + Bu$, $y = C\mathbf{x}$:
@@ -169,7 +169,7 @@ przestrzeni stanów w~postaci $\dot{\mathbf{x}} = A\mathbf{x} + Bu$, $y = C\math
   \begin{bmatrix} 0 & 1 & 0 \\ 0 & 0 & c_{\mathrm{ball}} \\ 0 & 0 & -1/T_{\mathrm{serwo}} \end{bmatrix}
   \begin{bmatrix} x_1 \\ x_2 \\ x_3 \end{bmatrix}
   +
-  \begin{bmatrix} 0 \\ 0 \\ 1/T_{\mathrm{serwo}} \end{bmatrix} u,
+  \begin{bmatrix} 0 \\ 0 \\ k_{mech}/T_{\mathrm{serwo}} \end{bmatrix} u,
   \label{eq:statespace}
 \end{equation}
 
@@ -195,7 +195,7 @@ Macierz sterowalności $\mathcal{C} = [B\;AB\;A^2B]$:
   \mathcal{C} = \begin{bmatrix}
     0       &  0       & 12{,}389 \\
     0       & 12{,}389 & -110{,}796 \\
-    10{,}526 & -110{,}796 & 1{,}166\times10^3
+    10{,}526 & -110{,}796 & 1{,}166\cdot10^3
   \end{bmatrix}.
 \end{equation}
 
