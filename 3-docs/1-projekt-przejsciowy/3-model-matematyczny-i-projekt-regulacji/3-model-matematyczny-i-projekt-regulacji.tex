@@ -116,18 +116,200 @@ Podstawiając wartości liczbowe:
 \section{Identyfikacja parametrów modelu}
 % -----------------------------------------------------------------------
 
-\subsection{Sygnał PRBS}
+% ---------------------------------------------------------------
+% SEKCJA 3.2 – Identyfikacja parametrów modelu
+% Zastępuje dotychczasowe podrozdziały 3.2.1 (Sygnał PRBS) i 3.2.2
+% Wkleić w miejsce \subsection{Sygnał PRBS} ... \subsection{Przyjęte parametry modelu}
+% ---------------------------------------------------------------
 
-Do identyfikacji parametrów serwa zastosowano sygnał PRBS
-(\textit{Pseudo Random Binary Sequence}) — deterministyczną sekwencję
-dwustanową o~właściwościach szumopodobnych.
-PRBS zapewnia szerokie widmo częstotliwościowe i~ograniczoną amplitudę,
-co jest istotne ze względu na stabilność mechaniki stanowiska.
+% ---------------------------------------------------------------
+% SEKCJA 3.2 – Identyfikacja parametrów modelu
+% Zastępuje dotychczasowe podrozdziały 3.2.1 (Sygnał PRBS) i 3.2.2
+% Wkleić w miejsce \subsection{Sygnał PRBS} ... \subsection{Przyjęte parametry modelu}
+% ---------------------------------------------------------------
 
-Ze względu na ograniczoną możliwość doboru parametrów PRBS
-(długości sekwencji i~czasu trwania bitu) pokrywających pełną dynamikę
-obiektu, wyniki identyfikacji oparto ostatecznie na odpowiedzi skokowej
-i~danych katalogowych serwomechanizmu.
+\subsection{Identyfikacja wzmocnienia metodą odpowiedzi skokowej}
+
+\subsubsection{Metodyka pomiarowa}
+
+W celu doświadczalnego wyznaczenia wzmocnienia statycznego układu przeprowadzono
+eksperyment polegający na rejestracji odpowiedzi pozycji kulki na wymuszenia skokowe
+kąta serwomechanizmu.
+Punktem pracy (poziomem zerowym) przyjęto wysterowanie serwomechanizmu równe
+$100\degree$, przy którym belka pozostaje w przybliżeniu pozioma.
+Na wejście układu podawano kolejno skoki do pozycji $109\degree, 112\degree, 115\degree,
+120\degree, 125\degree, 130\degree$ oraz $140\degree$.
+Amplituda $A$ każdego wymuszenia stanowiła różnicę między zadaną pozycją a
+poziomem zerowym (np.\ dla $125\degree$ wynosiła $A = 25\degree$).
+W trakcie eksperymentu rejestrowano pozycję kulki na belce wyrażoną w milimetrach
+w funkcji czasu.
+
+\subsubsection{Analiza danych i estymacja wzmocnienia}
+
+Dane pomiarowe zapisane w plikach CSV poddano obróbce w środowisku MATLAB.
+W pierwszym kroku zwizualizowano surowe przebiegi i ręcznie wyznaczono okno
+czasowe odpowiadające właściwemu ruchowi kulki -- od momentu inicjacji skoku do
+chwili uderzenia kulki w ogranicznik belki.
+
+Zgodnie z uproszczonym modelem  przyjęto, że
+transmitancja łącząca kąt pochylenia belki z pozycją kulki ma postać podwójnego
+całkowania:
+
+\begin{equation}
+    G(s) = \frac{K}{s^2}.
+    \label{eq:Gident}
+\end{equation}
+
+W dziedzinie czasu odpowiada to równaniu różniczkowemu $\ddot{y}(t) = K \cdot u(t)$.
+Przyłożenie na wejście funkcji skokowej o amplitudzie $A$ i dwukrotne scałkowanie
+(przy zerowych warunkach początkowych) daje:
+
+\begin{equation}
+    y(t) = \frac{1}{2}\,K\,A\,t^2.
+    \label{eq:yquad}
+\end{equation}
+
+Wycięty fragment danych scentrowano w punkcie $(0,\,0)$, a następnie za pomocą
+funkcji \texttt{polyfit} wykonano aproksymację wielomianem drugiego stopnia
+$y(t) = p_1 t^2 + p_2 t + p_3$.
+Porównując współczynnik przy $t^2$ z równaniem~\eqref{eq:yquad} otrzymuje się:
+
+\begin{equation}
+    p_1 = \frac{1}{2}\,K\,A
+    \qquad\Longrightarrow\qquad
+    K = \frac{2\,p_1}{A}.
+    \label{eq:Kest}
+\end{equation}
+
+Poniższy listing przedstawia fragment skryptu realizującego opisaną procedurę:
+
+\begin{lstlisting}[language=Matlab, frame=single,
+    caption={Fragment skryptu MATLAB estymującego wzmocnienie $K$},
+    label={lst:matlab_ident}]
+% Ograniczenie danych do wlasciwego ruchu pilki
+idx = t_raw > 1.1 & t_raw < 2.2;
+t = t_raw(idx);
+y = y_raw(idx);
+
+% Przesuniecie czasu i pozycji do zera
+t = t - t(1);
+y = y - y(1);
+
+% Dopasowanie wielomianu 2. stopnia
+p = polyfit(t, y, 2);
+
+% Obliczenie wzmocnienia K
+K_obl = (2 * p(1)) / A_stopnie;
+\end{lstlisting}
+
+\subsubsection{Weryfikacja wyników i wyznaczenie modelu końcowego}
+
+Powyższą procedurę powtórzono dla wszystkich siedmiu wartości wychylenia.
+Rysunki~\ref{fig:ident109}--\ref{fig:ident125} przedstawiają surowe przebiegi pozycji
+kulki oraz dopasowane parabole dla kolejnych prób.
+
+Zaobserwowano, że dla dużych kątów wychylenia estymowane wzmocnienie w największym
+stopniu odbiega od wartości średniej.
+Przyczyną jest niezerowa dynamika serwomechanizmu -- przy dużych skokach zadanej
+pozycji kulka zaczyna się toczyć zanim serwo osiągnie wartość docelową, co narusza
+założenie o skokowym charakterze wymuszenia i zaburza wyniki estymacji.
+Z tego powodu z analizy wykluczono próby dla wychyleń $130\degree$ i $140\degree$,
+pozostawiając pięć zestawów danych.
+
+Wyznaczone wartości wzmocnienia dla pięciu uwzględnionych prób wynoszą:
+\begin{equation}
+    K_i = \bigl[11{,}9254;\;11{,}2886;\;12{,}2396;\;12{,}2772;\;11{,}9280\bigr].
+    \label{eq:Klist}
+\end{equation}
+
+Końcową wartość wzmocnienia przyjęto jako średnią arytmetyczną powyższych próbek:
+\begin{equation}
+    K = 11{,}9318\;\frac{\mathrm{mm}}{\mathrm{s}^2\cdot\degree}.
+    \label{eq:Kfinal}
+\end{equation}
+
+Transmitancja identyfikowanego układu kulka--belka przyjmuje zatem postać:
+\begin{equation}
+    G(s) = \frac{11{,}9318}{s^2}.
+    \label{eq:Gfinal}
+\end{equation}
+
+Uzyskana wartość $K$ zastępuje teoretyczne $c_\mathrm{ball} \cdot k_\mathrm{mech}$
+i stanowi podstawę do strojenia regulatorów PID i LQR opisanych w dalszej części
+pracy.
+Należy odnotować, że na dokładność estymacji wpływ ma ograniczona liczba prób
+pomiarowych oraz ręczny dobór okna czasowego analizy -- dobór granic okna istotnie
+oddziałuje na wyznaczoną wartość współczynnika $p_1$, a tym samym na końcowy wynik
+uśredniania.
+
+% --- Rysunki identyfikacyjne ---
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_9.pdf}\\[4pt]
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_109.pdf}
+    \caption{Wyniki identyfikacji dla pozycji zadanej $109\degree$:
+             surowe dane pozycji kulki (góra) oraz dopasowanie paraboliczne (dół).}
+    \label{fig:ident109}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_112.pdf}\\[4pt]
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_112.pdf}
+    \caption{Wyniki identyfikacji dla pozycji zadanej $112\degree$.}
+    \label{fig:ident112}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_115.pdf}\\[4pt]
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_115.pdf}
+    \caption{Wyniki identyfikacji dla pozycji zadanej $115\degree$.}
+    \label{fig:ident115}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_120.pdf}\\[4pt]
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_120.pdf}
+    \caption{Wyniki identyfikacji dla pozycji zadanej $120\degree$.}
+    \label{fig:ident120}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_125.pdf}\\[4pt]
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_125.pdf}
+    \caption{Wyniki identyfikacji dla pozycji zadanej $125\degree$.}
+    \label{fig:ident125}
+\end{figure}
+
+% Rysunki 130 i 140 stopni -- odrzucone z identyfikacji, ale zamieszczone
+% dla kompletności (opcjonalnie - można usunąć bloki poniżej)
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykresy_wychylenie_130.pdf}\\[4pt]
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopsaowanie_130.pdf}
+    \caption{Wyniki dla pozycji zadanej $130\degree$ -- próba odrzucona
+             z uwagi na widoczny wpływ dynamiki serwomechanizmu.}
+    \label{fig:ident130}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wychylenie_140_wykres.pdf}\\[4pt]
+    \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_140.pdf}
+    \caption{Wyniki dla pozycji zadanej $140\degree$ -- próba odrzucona
+             z uwagi na widoczny wpływ dynamiki serwomechanizmu.}
+    \label{fig:ident140}
+\end{figure}
+
+% ---------------------------------------------------------------
+% SEKCJA 3.2.2 – Przyjęte parametry modelu (aktualizacja tabeli)
+% ---------------------------------------------------------------
+
+
 
 \subsection{Przyjęte parametry modelu}
 
