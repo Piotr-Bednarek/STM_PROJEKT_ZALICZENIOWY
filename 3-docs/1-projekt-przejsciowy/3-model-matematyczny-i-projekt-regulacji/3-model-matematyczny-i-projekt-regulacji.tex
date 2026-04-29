@@ -129,60 +129,60 @@ Podstawiając wartości liczbowe:
 % ---------------------------------------------------------------
 
 \subsection{Identyfikacja wzmocnienia metodą odpowiedzi skokowej}
-
+ 
 \subsubsection{Metodyka pomiarowa}
-
+ 
 W celu doświadczalnego wyznaczenia wzmocnienia statycznego układu przeprowadzono
 eksperyment polegający na rejestracji odpowiedzi pozycji kulki na wymuszenia skokowe
 kąta serwomechanizmu.
 Punktem pracy (poziomem zerowym) przyjęto wysterowanie serwomechanizmu równe
-$100\degree$, przy którym belka pozostaje w przybliżeniu pozioma.
-Na wejście układu podawano kolejno skoki do pozycji $109\degree, 112\degree, 115\degree,
-120\degree, 125\degree, 130\degree$ oraz $140\degree$.
+$100^\circ$, przy którym belka pozostaje w przybliżeniu pozioma.
+Na wejście układu podawano kolejno skoki do pozycji $109^\circ, 112^\circ, 115^\circ,
+120^\circ, 125^\circ, 130^\circ$ oraz $140^\circ$.
 Amplituda $A$ każdego wymuszenia stanowiła różnicę między zadaną pozycją a
-poziomem zerowym (np.\ dla $125\degree$ wynosiła $A = 25\degree$).
+poziomem zerowym (np.\ dla $125^\circ$ wynosiła $A = 25^\circ$).
 W trakcie eksperymentu rejestrowano pozycję kulki na belce wyrażoną w milimetrach
 w funkcji czasu.
-
+ 
 \subsubsection{Analiza danych i estymacja wzmocnienia}
-
+ 
 Dane pomiarowe zapisane w plikach CSV poddano obróbce w środowisku MATLAB.
 W pierwszym kroku zwizualizowano surowe przebiegi i ręcznie wyznaczono okno
 czasowe odpowiadające właściwemu ruchowi kulki -- od momentu inicjacji skoku do
 chwili uderzenia kulki w ogranicznik belki.
-
-Zgodnie z uproszczonym modelem  przyjęto, że
+ 
+Zgodnie z uproszczonym modelem (zob.\ równanie~\eqref{eq:Gball}) przyjęto, że
 transmitancja łącząca kąt pochylenia belki z pozycją kulki ma postać podwójnego
 całkowania:
-
+ 
 \begin{equation}
     G(s) = \frac{K}{s^2}.
     \label{eq:Gident}
 \end{equation}
-
+ 
 W dziedzinie czasu odpowiada to równaniu różniczkowemu $\ddot{y}(t) = K \cdot u(t)$.
-Przyłożenie na wejście funkcji skokowej o amplitudzie $A$ i dwukrotne scałkowanie
-(przy zerowych warunkach początkowych) daje:
-
+Przyłożenie na wejście funkcji skokowej o amplitudzie $A\;[{^\circ}]$ i dwukrotne
+scałkowanie (przy zerowych warunkach początkowych) daje:
+ 
 \begin{equation}
-    y(t) = \frac{1}{2}\,K\,A\,t^2.
+    y(t) = \frac{1}{2}\,K\,A\,t^2, \quad y\;[\mathrm{mm}],\; t\;[\mathrm{s}].
     \label{eq:yquad}
 \end{equation}
-
+ 
 Wycięty fragment danych scentrowano w punkcie $(0,\,0)$, a następnie za pomocą
 funkcji \texttt{polyfit} wykonano aproksymację wielomianem drugiego stopnia
 $y(t) = p_1 t^2 + p_2 t + p_3$.
 Porównując współczynnik przy $t^2$ z równaniem~\eqref{eq:yquad} otrzymuje się:
-
+ 
 \begin{equation}
     p_1 = \frac{1}{2}\,K\,A
     \qquad\Longrightarrow\qquad
-    K = \frac{2\,p_1}{A}.
+    K = \frac{2\,p_1}{A}, \quad K\;\left[\frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}\right].
     \label{eq:Kest}
 \end{equation}
-
+ 
 Poniższy listing przedstawia fragment skryptu realizującego opisaną procedurę:
-
+ 
 \begin{lstlisting}[language=Matlab, frame=single,
     caption={Fragment skryptu MATLAB estymującego wzmocnienie $K$},
     label={lst:matlab_ident}]
@@ -190,145 +190,200 @@ Poniższy listing przedstawia fragment skryptu realizującego opisaną procedur�
 idx = t_raw > 1.1 & t_raw < 2.2;
 t = t_raw(idx);
 y = y_raw(idx);
-
+ 
 % Przesuniecie czasu i pozycji do zera
 t = t - t(1);
 y = y - y(1);
-
+ 
 % Dopasowanie wielomianu 2. stopnia
 p = polyfit(t, y, 2);
-
-% Obliczenie wzmocnienia K
+ 
+% Obliczenie wzmocnienia K [mm / (s^2 * deg)]
 K_obl = (2 * p(1)) / A_stopnie;
 \end{lstlisting}
-
+ 
 \subsubsection{Weryfikacja wyników i wyznaczenie modelu końcowego}
-
+ 
 Powyższą procedurę powtórzono dla wszystkich siedmiu wartości wychylenia.
 Rysunki~\ref{fig:ident109}--\ref{fig:ident125} przedstawiają surowe przebiegi pozycji
 kulki oraz dopasowane parabole dla kolejnych prób.
-
+ 
 Zaobserwowano, że dla dużych kątów wychylenia estymowane wzmocnienie w największym
 stopniu odbiega od wartości średniej.
 Przyczyną jest niezerowa dynamika serwomechanizmu -- przy dużych skokach zadanej
 pozycji kulka zaczyna się toczyć zanim serwo osiągnie wartość docelową, co narusza
 założenie o skokowym charakterze wymuszenia i zaburza wyniki estymacji.
-Z tego powodu z analizy wykluczono próby dla wychyleń $130\degree$ i $140\degree$,
+Z tego powodu z analizy wykluczono próby dla wychyleń $130^\circ$ i $140^\circ$,
 pozostawiając pięć zestawów danych.
-
+ 
 Wyznaczone wartości wzmocnienia dla pięciu uwzględnionych prób wynoszą:
 \begin{equation}
-    K_i = \bigl[11{,}9254;\;11{,}2886;\;12{,}2396;\;12{,}2772;\;11{,}9280\bigr].
+    K_i = \bigl[11{,}9254;\;11{,}2886;\;12{,}2396;\;12{,}2772;\;11{,}9280\bigr]
+    \;\left[\frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}\right].
     \label{eq:Klist}
 \end{equation}
-
+ 
 Końcową wartość wzmocnienia przyjęto jako średnią arytmetyczną powyższych próbek:
 \begin{equation}
-    K = 11{,}9318\;\frac{\mathrm{mm}}{\mathrm{s}^2\cdot\degree}.
+    K = 11{,}9318\;\frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}.
     \label{eq:Kfinal}
 \end{equation}
-
+ 
 Transmitancja identyfikowanego układu kulka--belka przyjmuje zatem postać:
 \begin{equation}
-    G(s) = \frac{11{,}9318}{s^2}.
+    G(s) = \frac{11{,}9318}{s^2}, \quad
+    \left[\frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}\right].
     \label{eq:Gfinal}
 \end{equation}
-
-Uzyskana wartość $K$ zastępuje teoretyczne $c_\mathrm{ball} \cdot k_\mathrm{mech}$
-i stanowi podstawę do strojenia regulatorów PID i LQR opisanych w dalszej części
-pracy.
+ 
 Należy odnotować, że na dokładność estymacji wpływ ma ograniczona liczba prób
 pomiarowych oraz ręczny dobór okna czasowego analizy -- dobór granic okna istotnie
 oddziałuje na wyznaczoną wartość współczynnika $p_1$, a tym samym na końcowy wynik
 uśredniania.
-
+ 
 % --- Rysunki identyfikacyjne ---
-
+ 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_9.pdf}\\[4pt]
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_109.pdf}
-    \caption{Wyniki identyfikacji dla pozycji zadanej $109\degree$:
+    \caption{Wyniki identyfikacji dla pozycji zadanej $109^\circ$:
              surowe dane pozycji kulki (góra) oraz dopasowanie paraboliczne (dół).}
     \label{fig:ident109}
 \end{figure}
-
+ 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_112.pdf}\\[4pt]
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_112.pdf}
-    \caption{Wyniki identyfikacji dla pozycji zadanej $112\degree$.}
+    \caption{Wyniki identyfikacji dla pozycji zadanej $112^\circ$.}
     \label{fig:ident112}
 \end{figure}
-
+ 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_115.pdf}\\[4pt]
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_115.pdf}
-    \caption{Wyniki identyfikacji dla pozycji zadanej $115\degree$.}
+    \caption{Wyniki identyfikacji dla pozycji zadanej $115^\circ$.}
     \label{fig:ident115}
 \end{figure}
-
+ 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_120.pdf}\\[4pt]
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_120.pdf}
-    \caption{Wyniki identyfikacji dla pozycji zadanej $120\degree$.}
+    \caption{Wyniki identyfikacji dla pozycji zadanej $120^\circ$.}
     \label{fig:ident120}
 \end{figure}
-
+ 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykres_wychylenie_125.pdf}\\[4pt]
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_125.pdf}
-    \caption{Wyniki identyfikacji dla pozycji zadanej $125\degree$.}
+    \caption{Wyniki identyfikacji dla pozycji zadanej $125^\circ$.}
     \label{fig:ident125}
 \end{figure}
-
-% Rysunki 130 i 140 stopni -- odrzucone z identyfikacji, ale zamieszczone
-% dla kompletności (opcjonalnie - można usunąć bloki poniżej)
+ 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wykresy_wychylenie_130.pdf}\\[4pt]
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopsaowanie_130.pdf}
-    \caption{Wyniki dla pozycji zadanej $130\degree$ -- próba odrzucona
+    \caption{Wyniki dla pozycji zadanej $130^\circ$ -- próba odrzucona
              z uwagi na widoczny wpływ dynamiki serwomechanizmu.}
     \label{fig:ident130}
 \end{figure}
-
+ 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/wychylenie_140_wykres.pdf}\\[4pt]
     \includegraphics[width=0.6\textwidth]{3-model-matematyczny-i-projekt-regulacji/3-img/dopasowanie_140.pdf}
-    \caption{Wyniki dla pozycji zadanej $140\degree$ -- próba odrzucona
+    \caption{Wyniki dla pozycji zadanej $140^\circ$ -- próba odrzucona
              z uwagi na widoczny wpływ dynamiki serwomechanizmu.}
     \label{fig:ident140}
 \end{figure}
-
+ 
 % ---------------------------------------------------------------
-% SEKCJA 3.2.2 – Przyjęte parametry modelu (aktualizacja tabeli)
+% SEKCJA 3.2.2 – Porównanie wzmocnień
 % ---------------------------------------------------------------
-
-
-
-\subsection{Przyjęte parametry modelu}
-
+ 
+\subsection{Porównanie wzmocnienia teoretycznego i doświadczalnego}
+\label{sec:porownanie_K}
+ 
+Wzmocnienie układu kulka--belka wyznaczono dwiema niezależnymi metodami.
+Przed zestawieniem wyników konieczne jest ujednolicenie jednostek, ponieważ obie
+metody operują na różnych układach pomiarowych.
+ 
+\paragraph{Wzmocnienie teoretyczne.}
+Na podstawie wyprowadzonego modelu wzmocnienie statyczne układu wynosi:
+\begin{equation}
+    K_\mathrm{teor} = k_\mathrm{mech} \cdot c_\mathrm{ball}
+    = 0{,}20 \times 5{,}886
+    = 1{,}177 \; \frac{\mathrm{m}}{\mathrm{s}^2 \cdot \mathrm{rad}},
+    \label{eq:Kteor}
+\end{equation}
+gdzie wejście $u$ wyrażone jest w radianach, a wyjście $x$ w metrach.
+ 
+\paragraph{Wzmocnienie doświadczalne -- przeliczenie jednostek.}
+Estymacja metodą odpowiedzi skokowej dała wynik w jednostkach pomiarowych eksperymentu:
+\begin{equation}
+    K_\mathrm{exp} = 11{,}9318 \; \frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}.
+    \label{eq:Kexp_raw}
+\end{equation}
+Przeliczenenie na układ SI wymaga przeliczenia milimetrów na metry oraz stopni na radiany:
+\begin{equation}
+    K_\mathrm{exp,SI}
+    = K_\mathrm{exp} \cdot \frac{10^{-3}\;\mathrm{m/mm}}{\pi/180\;\mathrm{rad/{^\circ}}}
+    = 11{,}9318 \times \frac{10^{-3}}{0{,}017453}
+    \approx 0{,}684 \; \frac{\mathrm{m}}{\mathrm{s}^2 \cdot \mathrm{rad}}.
+    \label{eq:Kexp_SI}
+\end{equation}
+ 
+\paragraph{Porównanie.}
+Zestawienie obu wartości w tych samych jednostkach przedstawiono
+w tabeli~\ref{tab:Kcomp}.
 \begin{table}[H]
-  \centering
-  \caption{Parametry numeryczne modelu}
-  \label{tab:parametry}
-  \begin{tabular}{lll}
-    \toprule
-    \textbf{Parametr} & \textbf{Wartość} & \textbf{Źródło} \\
-    \midrule
-    $T_{\mathrm{serwo}}$ & $0{,}095\,\mathrm{s}$ & karta katalogowa, interpolacja \\
-    $c_{\mathrm{ball}}$  & $5{,}886\,\mathrm{m/s^2}$ & wyprowadzenie analityczne \\
-    $k_{\mathrm{mech}}$  & $0{,}20$ & pomiar geometryczny ($3\,\mathrm{cm}/15\,\mathrm{cm}$) \\
-    \bottomrule
-  \end{tabular}
+\centering
+\caption{Porównanie wzmocnienia teoretycznego i doświadczalnego}
+\label{tab:Kcomp}
+\begin{tabular}{lcc}
+\hline
+\textbf{Metoda} & \textbf{Wartość} $\left[\dfrac{\mathrm{m}}{\mathrm{s}^2 \cdot \mathrm{rad}}\right]$ & \textbf{Źródło} \\[6pt]
+\hline
+Teoretyczna ($k_\mathrm{mech} \cdot c_\mathrm{ball}$) & $1{,}177$ & wyprowadzenie analityczne \\
+Doświadczalna (odpowiedź skokowa)                      & $0{,}684$ & identyfikacja eksperymentalna \\
+\hline
+Stosunek $K_\mathrm{teor}/K_\mathrm{exp,SI}$           & $1{,}72$  & --- \\
+\hline
+\end{tabular}
 \end{table}
-
-TODO dokonczyc te sekcje!!!
+ 
+Różnica rzędu 72\% wynika z uproszczonego modelu przełożenia mechanicznego
+oraz założenia idealnego toczenia kulki bez poślizgu. Do strojenia regulatorów przyjęto wartość doświadczalną jako bliższą rzeczywistej
+dynamice obiektu.
+ 
+% ---------------------------------------------------------------
+% SEKCJA 3.2.3 – Przyjęte parametry modelu
+% ---------------------------------------------------------------
+ 
+\subsection{Przyjęte parametry modelu}
+ 
+\begin{table}[H]
+\centering
+\caption{Parametry numeryczne modelu przyjęte do syntezy regulatorów}
+\label{tab:params}
+\begin{tabular}{lllp{5cm}}
+\hline
+\textbf{Parametr} & \textbf{Wartość} & \textbf{Jednostka} & \textbf{Źródło} \\
+\hline
+$T_\mathrm{serwo}$  & $0{,}095$ & $\mathrm{s}$ & karta katalogowa, interpolacja \\[4pt]
+$c_\mathrm{ball}$   & $5{,}886$ & $\dfrac{\mathrm{m}}{\mathrm{s}^2 \cdot \mathrm{rad}}$ & wyprowadzenie analityczne \\[8pt]
+$k_\mathrm{mech}$   & $0{,}20$  & $-$ & pomiar geometryczny ($3\;\mathrm{cm}/15\;\mathrm{cm}$) \\[4pt]
+$K_\mathrm{exp}$    & $11{,}9318$ & $\dfrac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}$ & identyfikacja doświadczalna \\[8pt]
+$K_\mathrm{exp,SI}$ & $0{,}684$ & $\dfrac{\mathrm{m}}{\mathrm{s}^2 \cdot \mathrm{rad}}$ & przeliczenie z $K_\mathrm{exp}$ \\[4pt]
+\hline
+\end{tabular}
+\end{table}
+TODO dokonczyc te sekcje!!! - tabela jeszcze do zmiany 
 
 % -----------------------------------------------------------------------
 \section{Projekt regulatora LQR}
