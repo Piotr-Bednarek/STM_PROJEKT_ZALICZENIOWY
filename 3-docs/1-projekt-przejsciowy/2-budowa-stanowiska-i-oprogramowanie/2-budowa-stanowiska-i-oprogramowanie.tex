@@ -242,12 +242,19 @@ osKernelStart();
 \section{System wizyjny}
 \label{sec:wizja}
 
-Stanowisko wyposażone jest w~podsystem wizji komputerowej realizujący bezdotykowy
-pomiar pozycji kulki oraz kąta nachylenia belki.
-Akwizycja i~przetwarzanie obrazu realizowane są po stronie aplikacji desktopowej
-(Python\,/\,OpenCV), a~wyniki przesyłane są do mikrokontrolera przez interfejs UART. 
+Stanowisko wyposażone jest w~podsystem wizji komputerowej, którego zadaniem jest
+bezdotykowy pomiar położenia kulki oraz kąta nachylenia belki. Zastosowanie kamery
+pozwala na obserwację całej długości obiektu i~jednoczesne wyznaczanie geometrii
+belki na podstawie znaczników odniesienia. Przetwarzanie obrazu realizowane jest
+po stronie aplikacji desktopowej w~języku Python z~użyciem biblioteki OpenCV,
+natomiast mikrokontroler STM32 otrzymuje już gotowe wielkości fizyczne: pozycję
+kulki w~milimetrach oraz kąt belki w~stopniach.
 
-tutaj jakis screen z apki @piotrku 
+Algorytm wizyjny został umieszczony w~klasie \texttt{OpenCVPanel}. Panel aplikacji
+zawiera trzy tryby podglądu: detekcję kulki, detekcję znaczników ArUco oraz widok
+pomiarowy łączący oba algorytmy. Dzięki temu możliwe jest osobne strojenie progów
+kolorystycznych, parametrów markerów oraz kalibracji geometrycznej, a~następnie
+obserwacja końcowego wyniku wykorzystywanego przez regulator.
 
 % -----------------------------------------------------------------------
 \subsection{Konfiguracja kamery i akwizycja obrazu}
@@ -261,7 +268,14 @@ w~celu minimalizacji opóźnienia pomiarowego.
 Aplikacja obsługuje automatyczne wykrywanie dostępnych kamer (tryb auto)
 lub ręczny wybór indeksu urządzenia przez użytkownika.
 Przetwarzanie kolejnych klatek wyzwalane jest przez timer Qt uruchamiany
-z~jak największą częstotliwością.
+z~okresem 1\,ms (\texttt{camera\_timer.start(1)}), dzięki czemu aplikacja próbuje
+odebrać i~przetworzyć obraz tak szybko, jak pozwala na to rzeczywista liczba
+klatek dostarczana przez kamerę i~czas obliczeń algorytmu.
+
+Po uruchomieniu kamery aplikacja wykonuje próbny odczyt klatki. Dopiero poprawnie
+odebrany obraz powoduje przejście panelu w~stan aktywny. Każda przetworzona klatka
+jest konwertowana z~formatu OpenCV do obiektu \texttt{QImage}, a~następnie
+wyświetlana w~interfejsie Qt razem z~bieżącą informacją o~liczbie klatek na sekundę.
 
 % -----------------------------------------------------------------------
 \subsection{Detekcja kulki metodą progowania w przestrzeni HSV}
@@ -269,26 +283,38 @@ z~jak największą częstotliwością.
 
 Kulka (piłeczka ping-pongowa) wykrywana jest na podstawie koloru
 w~przestrzeni barw HSV (\emph{Hue, Saturation, Value}).
+Podejście to wybrano ze względu na niewielki koszt obliczeniowy oraz fakt, że
+obiekt ma wyróżniający się kolor i~regularny kształt. Przestrzeń HSV jest
+wygodniejsza od RGB, ponieważ składowa barwy jest w~dużym stopniu oddzielona od
+jasności, co ułatwia dobór progów przy umiarkowanych zmianach oświetlenia.
 Przetwarzanie każdej klatki przebiega w~następujących krokach:
 
 \begin{enumerate}
-  \item \textbf{Rozmycie gaussowskie} — redukcja szumów; jądro $21\times21$\,px.
-  \item \textbf{Konwersja BGR\,$\to$\,HSV} (\texttt{cv2.cvtColor}).
-  \item \textbf{Progowanie zakresu barwy} (\texttt{cv2.inRange}):
+  \item rozmycie gaussowskie redukujące lokalny szum obrazu; w~zapisanej
+    konfiguracji używane jest jądro $21\times21$\,px,
+  \item konwersja obrazu z~formatu BGR do HSV za pomocą \texttt{cv2.cvtColor},
+  \item progowanie zakresu barwy funkcją \texttt{cv2.inRange}:
     $H \in [8,\,64]$, $S \in [27,\,141]$, $V \in [121,\,255]$.
-  \item \textbf{Operacje morfologiczne} — domknięcie (MORPH\_CLOSE) i~otwarcie
-    (MORPH\_OPEN) na jądrze eliptycznym $5\times5$\,px; usuwają drobne
-    artefakty i~wypełniają luki w~obrysie kulki. TUTAJ COS DOPSIAC @piotrku
-  \item \textbf{Wykrywanie konturów} (\texttt{cv2.findContours}) — wybierany
-    jest kontur o~największym polu; jeśli przekracza próg obszaru minimalnego
-    (1480\,px\textsuperscript{2}), wyznaczane jest minimalne koło okalające
+  \item operacje morfologiczne na jądrze eliptycznym $5\times5$\,px: domknięcie
+    (\texttt{MORPH\_CLOSE}) wypełnia niewielkie przerwy w~masce, a~otwarcie
+    (\texttt{MORPH\_OPEN}) usuwa pojedyncze artefakty tła,
+  \item wykrywanie konturów funkcją \texttt{cv2.findContours}; wybierany jest
+    kontur o~największym polu, a~po przekroczeniu progu minimalnego
+    1480\,px\textsuperscript{2} wyznaczane jest minimalne koło okalające
     (\texttt{cv2.minEnclosingCircle}).
 \end{enumerate}
 
-W~celu zmniejszenia czasu obliczeniowego stosowany jest dynamiczny obszar
-zainteresowania (ROI): w~każdej klatce przeszukiwane jest okno $\pm100$\,px
-wokół ostatnio wyznaczonej pozycji kulki, a~pełny obraz skanowany jest tylko
-przy utracie śledzenia.
+Środek wyznaczonego koła traktowany jest jako pozycja kulki w~układzie pikselowym
+kamery. Aby ograniczyć czas przetwarzania, zastosowano obszary zainteresowania
+(ROI). Po poprawnej detekcji kolejna klatka analizowana jest tylko w~oknie
+o~marginesie 100\,px wokół ostatniej pozycji kulki. Jeżeli kontur nie zostanie
+znaleziony albo jego pole jest zbyt małe, dynamiczny ROI jest zerowany i~algorytm
+wraca do szerszego obszaru obejmującego środkową część obrazu.
+
+Parametry progowania HSV, rozmiar filtra rozmywającego oraz próg minimalnego pola
+konturu mogą być zmieniane z~poziomu GUI. Ustawienia są zapisywane do pliku
+\texttt{opencv\_params.json} i~wczytywane automatycznie przy starcie aplikacji,
+co pozwala szybko odtworzyć dobraną konfigurację po ponownym uruchomieniu programu.
 Podgląd maski HSV oraz obrazu wynikowego z~zaznaczoną kulką przedstawiony
 jest na rys.~\ref{fig:wizja_hsv}.
 
@@ -300,8 +326,6 @@ jest na rys.~\ref{fig:wizja_hsv}.
   \label{fig:wizja_hsv}
 \end{figure}
 
-@piotrku
-
 % -----------------------------------------------------------------------
 \subsection{Wyznaczanie pozycji belki na podstawie znaczników ArUco}
 % -----------------------------------------------------------------------
@@ -311,23 +335,36 @@ Na ramie stanowiska przyklejone są cztery kwadratowe znaczniki ze słownika
 ID\,0 (prawy koniec belki), ID\,1 i~ID\,3 (punkty referencyjne ramy)
 oraz ID\,2 (lewy koniec belki).
 Detekcja znaczników realizowana jest przez moduł \texttt{cv2.aruco.ArucoDetector}
-z~następującymi ustawieniami poprawiającymi wykrywanie małych i~zacienionych markerów:
+z~parametrami dobranymi pod niewielkie znaczniki widoczne w~obrazie kamery. Dla
+każdego wykrytego markera obliczany jest środek jako średnia współrzędnych
+przeciwległych narożników. Odcinek łączący środki ID\,2 oraz ID\,0 definiuje oś
+belki, natomiast odcinek ID\,1--ID\,3 może pełnić funkcję nieruchomej linii
+referencyjnej.
+
+W celu zwiększenia odporności detekcji na cienie i~mały rozmiar markerów zastosowano
+następujące mechanizmy:
 
 \begin{itemize}
-  \item preprocessing CLAHE (adaptacyjne wyrównanie histogramu lokalnego) na każdym
-    wycinku ROI markera — lepsze radzenie sobie z~nierównomiernym oświetleniem;
-  \item skalowanie podpikselowe ($\times3$) i~wyostrzanie jądrem $3\times3$
-    przed detekcją; @piotrku co to jest skalowanie podpikselowe xd???
-  \item precyzyjne dopasowanie narożników metodą AprilTag
-    (\texttt{CORNER\_REFINE\_APRILTAG});
-  \item rozluźnione progi geometryczne (dopuszczalna deformacja markera,
-    minimalna długość krawędzi 0,1\,\% szerokości obrazu).
+  \item adaptacyjne wyrównanie histogramu CLAHE stosowane do wycinków obrazu,
+    dzięki czemu lokalnie zwiększany jest kontrast bez nadmiernego wzmacniania
+    jasnych obszarów,
+  \item regulację jasności, kontrastu i~korekcji gamma z~poziomu panelu aplikacji,
+  \item opcjonalne powiększenie analizowanego wycinka przed detekcją oraz
+    wyostrzanie krawędzi filtrem konwolucyjnym $3\times3$,
+  \item doprecyzowanie położenia narożników metodą \texttt{CORNER\_REFINE\_APRILTAG}
+    lub, w~starszych wersjach OpenCV, metodą subpikselową,
+  \item rozluźnione ograniczenia geometryczne detektora, w~tym mniejszy minimalny
+    obwód markera i~większą dopuszczalną deformację czworokąta.
 \end{itemize}
 
-Każdy ze znaczników śledzony jest w~osobnym dynamicznym ROI o~marginesie 30\,px.
-Mechanizm \emph{position holding} pozwala utrzymać ostatnio wyznaczoną pozycję
-markera przez maksymalnie 15 klatek przy chwilowej utracie widoczności,
-co zapobiega skokom w~pomiarze kąta.
+Każdy ze znaczników śledzony jest w~osobnym dynamicznym ROI. Po pierwszej poprawnej
+detekcji algorytm w~kolejnych klatkach przeszukuje małe okno o~marginesie 30\,px
+wokół ostatniej pozycji danego markera. Jeśli marker nie zostanie odnaleziony przez
+kilka klatek, aplikacja wraca do szerszego statycznego ROI. Dodatkowo w~trybie
+pomiarowym działa mechanizm podtrzymania pozycji: chwilowo zgubiony marker może
+zachować ostatnie poprawne współrzędne maksymalnie przez 15 klatek. Ogranicza to
+pojedyncze skoki kąta belki wynikające z~krótkotrwałego zasłonięcia lub błędu
+detekcji.
 Rozmieszczenie znaczników na stanowisku przedstawione jest na rys.~\ref{fig:wizja_aruco}.
 
 \begin{figure}[H]
@@ -338,10 +375,8 @@ Rozmieszczenie znaczników na stanowisku przedstawione jest na rys.~\ref{fig:wiz
   \label{fig:wizja_aruco}
 \end{figure}
 
-@piotrku 
-
 % -----------------------------------------------------------------------
-\subsection{Kalibracja geometryczna i przeliczanie piksel $\to$ mm}
+\subsection{\texorpdfstring{Kalibracja geometryczna i przeliczanie piksel $\to$ mm}{Kalibracja geometryczna i przeliczanie piksel na mm}}
 \label{subsec:kalibracja_wizja}
 % -----------------------------------------------------------------------
 
@@ -357,11 +392,16 @@ Pozycja kulki wyznaczana jest jako rzut prostokątny jej środka na oś belki
 
 gdzie $\mathbf{p}$ to współrzędne środka kulki w~pikselach,
 $\mathbf{A}$ i~$\mathbf{B}$ to odpowiednio środki ID\,2 i~ID\,0.
+W implementacji parametr $t$ jest ograniczany do przedziału $[0,\,1]$, dlatego
+wynik odpowiada położeniu na odcinku belki nawet wtedy, gdy środek kulki zostanie
+wyznaczony nieznacznie poza linią markerów.
 
 Parametr $t$ przeliczany jest na milimetry za pomocą kalibracji dwupunktowej:
 użytkownik umieszcza kulkę kolejno przy lewym i~prawym końcu belki,
 rejestrując wartości $t_{\min} = 0{,}039$ i~$t_{\max} = 0{,}990$.
-Wzór konwersji: @piotrku czy te wartosci powinny byc tutaj wpisane???
+Wartości te pochodzą z~aktualnego pliku konfiguracyjnego aplikacji i~mogą zostać
+ponownie wyznaczone po zmianie położenia kamery lub markerów. Wzór konwersji ma
+postać:
 
 \begin{equation}
   x_{\mathrm{mm}} =
@@ -374,11 +414,16 @@ gdzie $L = 250\,\mathrm{mm}$ jest długością aktywnej części belki.
 Kąt nachylenia belki wyznaczany jest jako kąt odcinka ID\,2--ID\,0
 względem poziomu obrazu (metoda domyślna) lub względem linii referencyjnej
 ID\,1--ID\,3 (metoda alternatywna dostępna z~GUI).
+W pierwszej metodzie wykorzystywana jest funkcja \texttt{atan2}, przy czym znak
+składowej pionowej jest odwracany ze względu na układ współrzędnych obrazu, w~którym
+oś $y$ rośnie w~dół. W drugiej metodzie obliczany jest kąt między dwoma wektorami:
+osią belki oraz linią referencyjną. GUI umożliwia także zapisanie offsetu kąta,
+dzięki czemu aktualne ustawienie belki może zostać przyjęte jako $0^{\circ}$.
 Parametry kalibracji zapisywane są do pliku \texttt{opencv\_params.json}
 i~wczytywane automatycznie przy kolejnym uruchomieniu aplikacji.
 
 % -----------------------------------------------------------------------
-\subsection{Protokół komunikacyjny PC $\to$ STM32}
+\subsection{\texorpdfstring{Protokół komunikacyjny PC $\to$ STM32}{Protokół komunikacyjny PC do STM32}}
 % -----------------------------------------------------------------------
 
 Wyniki pomiaru (pozycja kulki i~kąt belki) przesyłane są do mikrokontrolera
@@ -393,17 +438,25 @@ Format ramki wizyjnej:
 gdzie \texttt{V} to pozycja kulki w~mm, \texttt{B} to kąt belki w~stopniach,
 a~\texttt{C} to suma kontrolna CRC-8 (wielomian 0x07) obejmująca pola
 \texttt{V} i~\texttt{B}.
-Ramki wysyłane są z~częstotliwością 30\,Hz przez dedykowany timer Qt.
+Ramki wysyłane są z~częstotliwością około 30\,Hz przez dedykowany timer Qt, ale
+tylko wtedy, gdy pozycja kulki została poprawnie wyznaczona. Wysyłanie realizuje
+metoda \texttt{send\_vision\_data()} z~modułu \texttt{serial\_manager.py}, która
+oblicza CRC tym samym algorytmem co firmware STM32.
 
 Po stronie firmware funkcja \texttt{ParseVisionFrame()} (plik \texttt{main.c})
 odróżnia ramkę wizyjną od standardowych komend sterujących po pierwszym znaku~\texttt{V},
 waliduje CRC i~aktualizuje zmienne globalne \texttt{g\_vision\_ball\_pos}
 i~\texttt{g\_vision\_beam\_angle}.
 Jeśli przez ponad 200\,ms nie nadejdzie żadna poprawna ramka wizyjna,
-regulator automatycznie przechodzi w~tryb fallback: jako pomiar pozycji
-używana jest ostatnia poprawna wartość, a~kąt belki przyjmuje wartość $0 \deg$. @piotrku nie wiem czemu tutaj nie robi sie stopien
+regulator przechodzi w~tryb awaryjny: jako pomiar pozycji używana jest ostatnia
+poprawna wartość, a~kąt belki przyjmuje wartość $0^{\circ}$.
 
-\begin{lstlisting}[style=cstyle, caption={Fragment funkcji ParseVisionFrame() (main.c) — parsowanie i walidacja CRC}]
+W pętli sterowania STM32 pozycja z~systemu wizyjnego jest dodatkowo filtrowana
+prostym filtrem wykładniczym. Tak przygotowana wartość zastępuje pomiar z~czujnika
+odległości i~jest używana do obliczenia uchybu regulatora. W trybie LQR do wektora
+stanu trafia również kąt belki przesłany w~ramce wizyjnej.
+
+\begin{lstlisting}[style=cstyle, caption={Fragment funkcji ParseVisionFrame() (main.c) -- parsowanie i walidacja CRC}]
 void ParseVisionFrame(const char *frame) {
     // ...parsowanie pol V i B...
     if (crc_found && ball_pos >= 0.0f) {
@@ -417,4 +470,3 @@ void ParseVisionFrame(const char *frame) {
     }
 }
 \end{lstlisting}
-
