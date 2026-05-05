@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ls -lh \"C:\\\\Users\\\\janek\\\\Documents\\\\STM_PROJEKT_ZALICZENIOWY\\\\3-docs\"/*.pdf \"C:\\\\Users\\\\janek\\\\Documents\\\\STM_PROJEKT_ZALICZENIOWY\\\\3-docs\"/*/*.pdf \"C:\\\\Users\\\\janek\\\\Documents\\\\STM_PROJEKT_ZALICZENIOWY\\\\3-docs\"/*/*/*.pdf)"
+      "Bash(ls -lh \"C:\\\\Users\\\\janek\\\\Documents\\\\STM_PROJEKT_ZALICZENIOWY\\\\3-docs\"/*.pdf \"C:\\\\Users\\\\janek\\\\Documents\\\\STM_PROJEKT_ZALICZENIOWY\\\\3-docs\"/*/*.pdf \"C:\\\\Users\\\\janek\\\\Documents\\\\STM_PROJEKT_ZALICZENIOWY\\\\3-docs\"/*/*/*.pdf)",
+      "Bash(python convert_webp.py)",
+      "Bash(Copy-Item *)",
+      "PowerShell(Copy-Item *)"
     ]
   }
 }

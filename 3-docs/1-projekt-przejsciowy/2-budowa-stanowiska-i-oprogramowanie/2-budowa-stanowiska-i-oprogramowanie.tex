@@ -91,7 +91,12 @@ Obraz pozyskiwany jest przez bibliotekę OpenCV za pomocą interfejsu
 \texttt{cv2.VideoCapture}, a~aplikacja umożliwia wybór indeksu kamery
 z~listy rozwijanej w~panelu wizyjnym.
 
-TODO fotka kamery 
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/kamera.png}
+  \caption{Kamera USB zamontowana nad stanowiskiem}
+  \label{fig:kamera}
+\end{figure}
 
 \paragraph{Potencjometr}
 
@@ -159,7 +164,6 @@ Zapewnia ona:
   \label{fig:desktop}
 \end{figure}
 
-% TODO: dodać zrzut ekranu zakładki wizyjnej aplikacji (opencv_panel)
 
 % -----------------------------------------------------------------------
 \section{Implementacja algorytmu sterowania}
@@ -320,7 +324,7 @@ jest na rys.~\ref{fig:wizja_hsv}.
 
 \begin{figure}[H]
   \centering
-  \fbox{\rule{0pt}{4cm}\rule{0.75\linewidth}{0pt}}
+  \includegraphics[width=0.9\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/wizja_hsv.png}
   \caption{Widok zakładki detekcji kulki: obraz oryginalny (lewy górny),
            maska HSV (prawy górny) oraz wynik z~zaznaczonym okręgiem (dolny)}
   \label{fig:wizja_hsv}
@@ -369,7 +373,7 @@ Rozmieszczenie znaczników na stanowisku przedstawione jest na rys.~\ref{fig:wiz
 
 \begin{figure}[H]
   \centering
-  \fbox{\rule{0pt}{4cm}\rule{0.75\linewidth}{0pt}}
+  \includegraphics[width=0.9\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/wizja_aruco.png}
   \caption{Stanowisko z~nałożonymi wykrytymi znacznikami ArUco: ID\,2 (lewy koniec),
            ID\,0 (prawy koniec), ID\,1 i~ID\,3 (punkty referencyjne ramy)}
   \label{fig:wizja_aruco}

@@ -13,15 +13,18 @@
         "adaptive_const": 1,
         "min_size": 0.001,
         "min_area": 0,
-        "brightness": 36,
-        "contrast": 3.0,
-        "gamma": 0.1,
+        "brightness": 45,
+        "contrast": 1.39,
+        "gamma": 0.47,
         "error_correction": 1.0,
         "corner_refine": true,
         "upscale_enabled": true,
         "upscale_factor": 3.0,
-        "sharpen_enabled": true,
-        "apriltag_refine": true
+        "sharpen_enabled": false,
+        "apriltag_refine": true,
+        "clahe_enabled": true,
+        "clahe_clip_limit": 1.0,
+        "clahe_tile_size": 2
     },
     "calibration": {
         "min": 0.038979109361814514,
