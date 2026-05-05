@@ -36,13 +36,13 @@ Komponenty wykorzystane przy budowie stanowiska zestawiono w tabeli \ref{tab:kom
   \label{tab:komponenty}
   \begin{tabular}{lll}
     \toprule
-    \textbf{Element} & \textbf{Model / opis} & \textbf{Interfejs} \\
+    \textbf{Element} & \textbf{Model / opis}                 & \textbf{Interfejs} \\
     \midrule
-    Mikrokontroler & STM32 Nucleo F767ZI & --- \\
-    Serwomechanek  & TowerPro MG946R      & PWM 50\,Hz \\
-    Kamera USB & rozdzielczość 640$\times$480, 30\,FPS & USB \\
-    Potencjometr   & liniowy & ADC (PA0) \\
-    Zasilacz       & 5\,V DC & --- \\
+    Mikrokontroler   & STM32 Nucleo F767ZI                   & ---                \\
+    Serwomechanek    & TowerPro MG946R                       & PWM 50\,Hz         \\
+    Kamera USB       & rozdzielczość 640$\times$480, 30\,FPS & USB                \\
+    Potencjometr     & liniowy                               & ADC (PA0)          \\
+    Zasilacz         & 5\,V DC                               & ---                \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -94,7 +94,7 @@ z~listy rozwijanej w~panelu wizyjnym.
 \begin{figure}[H]
   \centering
   \includegraphics[width=0.6\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/kamera.png}
-  \caption{Kamera USB zamontowana nad stanowiskiem}
+  \caption{Kamera USB używana w systemie wizyjnym}
   \label{fig:kamera}
 \end{figure}
 
@@ -124,15 +124,15 @@ Kod źródłowy podzielono na osobne moduły~C zgodnie ze standardem Doxygen:
   \label{tab:moduly}
   \begin{tabular}{ll}
     \toprule
-    \textbf{Moduł} & \textbf{Opis} \\
+    \textbf{Moduł}           & \textbf{Opis}                              \\
     \midrule
-    \texttt{main.c/h}       & Główna aplikacja, konfiguracja peryferiów \\
-    \texttt{servo\_pid.c/h} & Regulator PID z~anti-windup \\
-    \texttt{lqr.c/h}        & Regulator LQR (przestrzeń stanów) \\
-    \texttt{filters.c/h}    & Filtry cyfrowe (EMA, mediana, 1-Euro) \\
-    \texttt{crc8.c/h}       & Suma kontrolna CRC-8 \\
-    \texttt{calibration.c/h}& Kalibracja czujnika VL53L0X \\
-    \texttt{vl53l0x.c/h}    & Sterownik czujnika (I\textsuperscript{2}C) \\
+    \texttt{main.c/h}        & Główna aplikacja, konfiguracja peryferiów  \\
+    \texttt{servo\_pid.c/h}  & Regulator PID z~anti-windup                \\
+    \texttt{lqr.c/h}         & Regulator LQR (przestrzeń stanów)          \\
+    \texttt{filters.c/h}     & Filtry cyfrowe (EMA, mediana, 1-Euro)      \\
+    \texttt{crc8.c/h}        & Suma kontrolna CRC-8                       \\
+    \texttt{calibration.c/h} & Kalibracja czujnika VL53L0X                \\
+    \texttt{vl53l0x.c/h}     & Sterownik czujnika (I\textsuperscript{2}C) \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -171,21 +171,34 @@ Zapewnia ona:
 
 \subsection{Pętla sterowania i okres próbkowania}
 
-Algorytm sterowania realizowany jest przez \texttt{ControlTask} z~ustalonym
-okresem próbkowania 30\,ms????TODO wymuszonym przez funkcję \texttt{osDelay()}:
+Algorytm sterowania realizowany jest przez \texttt{ControlTask}.
+Pozycja kulki pobierana jest ze zmiennej \texttt{g\_vision\_ball\_pos},
+którą aplikacja desktopowa aktualizuje przez UART na podstawie obrazu z~kamery.
+W~przypadku braku aktualnych danych wizyjnych (timeout 200\,ms) pętla
+zachowuje ostatnią poprawną pozycję (\texttt{prev\_valid\_dist}):
 
-\begin{lstlisting}[style=cstyle, caption={Stały okres próbkowania w pętli sterowania (main.c)}]
-#define PID_DT_MS 30
+\begin{lstlisting}[style=cstyle, caption={Pobieranie pozycji kulki z systemu wizyjnego (main.c)}]
+uint8_t vision_timeout =
+    (HAL_GetTick() - g_vision_last_update) > 200;
 
-for (;;) {
-    distance = readRangeContinuousMillimeters(&distanceStr);
-
-    // obliczenia regulatora ...
-
-    SetServoAngle(pid_output);
-    osDelay(PID_DT_MS); // staly okres 30 ms
+if (g_vision_data_valid && !vision_timeout) {
+    vision_ball_pos   = g_vision_ball_pos;
+    vision_beam_angle = g_vision_beam_angle;
+} else {
+    vision_ball_pos   = prev_valid_dist;
+    vision_beam_angle = 0.0f;
 }
+
+// obliczenia regulatora ...
+
+SetServoAngleSmoothDeg(pid_angle);
+osDelay(g_pid_dt_ms);
 \end{lstlisting}
+
+Okres próbkowania wyznaczany jest przez \texttt{osDelay(g\_pid\_dt\_ms)},
+gdzie \texttt{g\_pid\_dt\_ms} inicjalizowane jest wartością domyślną
+\texttt{PID\_DT\_MS}~=~30\,ms i~może być zmieniane w~czasie rzeczywistym
+komendą UART \texttt{T:xx} (zakres 5--500\,ms).
 
 \subsection{Ograniczenie zakresu serwa}
 
@@ -204,12 +217,13 @@ SetServoAngle(pid_angle);
 
 Dane pomiarowe przesyłane są przez UART~3 (115200\,baud) w~formacie
 tekstowym z~sumą kontrolną CRC-8 (wielomian 0x07).
-Format ramki:
+Format ramki telemetrii wysyłanej przez mikrokontroler:
 \[
-\texttt{D:\%d;Z:\%d;A:\%d;F:\%d;E:\%d;V:\%d;S:\%d;C:\%02X\textbackslash r\textbackslash n}
+  \texttt{T:\%lu;D:\%d;Z:\%d;A:\%d;F:\%d;E:\%d;V:\%d;B:\%d;C:\%02X\textbackslash r\textbackslash n}
 \]
-gdzie kolejne pola oznaczają: surowy dystans, setpoint, kąt serwa,
-dystans filtrowany, uchyb, średni uchyb, status czujnika i~CRC.
+gdzie pola oznaczają odpowiednio: znacznik czasu (ms), pozycja kulki z~wizji,
+setpoint, kąt serwa, pozycja filtrowana, uchyb, średni uchyb,
+kąt belki z~wizji (×100) i~CRC-8.
 
 \begin{lstlisting}[style=cstyle, caption={Implementacja CRC-8 (crc8.c)}]
 uint8_t CalculateCRC8(const char *data, int len) {
@@ -295,17 +309,17 @@ Przetwarzanie każdej klatki przebiega w~następujących krokach:
 
 \begin{enumerate}
   \item rozmycie gaussowskie redukujące lokalny szum obrazu; w~zapisanej
-    konfiguracji używane jest jądro $21\times21$\,px,
+        konfiguracji używane jest jądro $21\times21$\,px,
   \item konwersja obrazu z~formatu BGR do HSV za pomocą \texttt{cv2.cvtColor},
   \item progowanie zakresu barwy funkcją \texttt{cv2.inRange}:
-    $H \in [8,\,64]$, $S \in [27,\,141]$, $V \in [121,\,255]$.
+        $H \in [8,\,64]$, $S \in [27,\,141]$, $V \in [121,\,255]$.
   \item operacje morfologiczne na jądrze eliptycznym $5\times5$\,px: domknięcie
-    (\texttt{MORPH\_CLOSE}) wypełnia niewielkie przerwy w~masce, a~otwarcie
-    (\texttt{MORPH\_OPEN}) usuwa pojedyncze artefakty tła,
+        (\texttt{MORPH\_CLOSE}) wypełnia niewielkie przerwy w~masce, a~otwarcie
+        (\texttt{MORPH\_OPEN}) usuwa pojedyncze artefakty tła,
   \item wykrywanie konturów funkcją \texttt{cv2.findContours}; wybierany jest
-    kontur o~największym polu, a~po przekroczeniu progu minimalnego
-    1480\,px\textsuperscript{2} wyznaczane jest minimalne koło okalające
-    (\texttt{cv2.minEnclosingCircle}).
+        kontur o~największym polu, a~po przekroczeniu progu minimalnego
+        1480\,px\textsuperscript{2} wyznaczane jest minimalne koło okalające
+        (\texttt{cv2.minEnclosingCircle}).
 \end{enumerate}
 
 Środek wyznaczonego koła traktowany jest jako pozycja kulki w~układzie pikselowym
@@ -326,7 +340,7 @@ jest na rys.~\ref{fig:wizja_hsv}.
   \centering
   \includegraphics[width=0.9\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/wizja_hsv.png}
   \caption{Widok zakładki detekcji kulki: obraz oryginalny (lewy górny),
-           maska HSV (prawy górny) oraz wynik z~zaznaczonym okręgiem (dolny)}
+    maska HSV (prawy górny) oraz wynik z~zaznaczonym okręgiem (dolny)}
   \label{fig:wizja_hsv}
 \end{figure}
 
@@ -350,15 +364,15 @@ następujące mechanizmy:
 
 \begin{itemize}
   \item adaptacyjne wyrównanie histogramu CLAHE stosowane do wycinków obrazu,
-    dzięki czemu lokalnie zwiększany jest kontrast bez nadmiernego wzmacniania
-    jasnych obszarów,
+        dzięki czemu lokalnie zwiększany jest kontrast bez nadmiernego wzmacniania
+        jasnych obszarów,
   \item regulację jasności, kontrastu i~korekcji gamma z~poziomu panelu aplikacji,
   \item opcjonalne powiększenie analizowanego wycinka przed detekcją oraz
-    wyostrzanie krawędzi filtrem konwolucyjnym $3\times3$,
+        wyostrzanie krawędzi filtrem konwolucyjnym $3\times3$,
   \item doprecyzowanie położenia narożników metodą \texttt{CORNER\_REFINE\_APRILTAG}
-    lub, w~starszych wersjach OpenCV, metodą subpikselową,
+        lub, w~starszych wersjach OpenCV, metodą subpikselową,
   \item rozluźnione ograniczenia geometryczne detektora, w~tym mniejszy minimalny
-    obwód markera i~większą dopuszczalną deformację czworokąta.
+        obwód markera i~większą dopuszczalną deformację czworokąta.
 \end{itemize}
 
 Każdy ze znaczników śledzony jest w~osobnym dynamicznym ROI. Po pierwszej poprawnej
@@ -375,7 +389,7 @@ Rozmieszczenie znaczników na stanowisku przedstawione jest na rys.~\ref{fig:wiz
   \centering
   \includegraphics[width=0.9\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/wizja_aruco.png}
   \caption{Stanowisko z~nałożonymi wykrytymi znacznikami ArUco: ID\,2 (lewy koniec),
-           ID\,0 (prawy koniec), ID\,1 i~ID\,3 (punkty referencyjne ramy)}
+    ID\,0 (prawy koniec), ID\,1 i~ID\,3 (punkty referencyjne ramy)}
   \label{fig:wizja_aruco}
 \end{figure}
 
@@ -389,7 +403,7 @@ Pozycja kulki wyznaczana jest jako rzut prostokątny jej środka na oś belki
 
 \begin{equation}
   t = \frac{(\mathbf{p} - \mathbf{A}) \cdot (\mathbf{B} - \mathbf{A})}
-           {\|\mathbf{B} - \mathbf{A}\|^2},
+  {\|\mathbf{B} - \mathbf{A}\|^2},
   \quad t \in [0,\;1],
   \label{eq:rzut}
 \end{equation}
@@ -409,7 +423,7 @@ postać:
 
 \begin{equation}
   x_{\mathrm{mm}} =
-    \frac{t - t_{\min}}{t_{\max} - t_{\min}} \cdot L,
+  \frac{t - t_{\min}}{t_{\max} - t_{\min}} \cdot L,
   \label{eq:kalibracja}
 \end{equation}
 
