@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Prompt dla Claude Design — schemat blokowy Ball on Beam</title>
+</head>
+<body>
+
+<h1>Prompt dla Claude Design — schemat blokowy stanowiska "Ball on Beam"</h1>
+
+<p>
+Poniższy prompt został przygotowany na podstawie analizy repozytorium
+<code>TeamPiesProjekt</code> (firmware STM32F767ZI, aplikacja Python/PySide6,
+sekcja "System wizyjny" w pracy dyplomowej) oraz uwagi recenzenta o tym,
+że na prezentacji warto pokazać schemat połączeń i przepływu sygnałów między
+czujnikiem/kamerą, mikrokontrolerem, obiektem i serwomechanizmem.
+</p>
+
+<hr>
+
+<h2>Prompt (wklej do Claude Design)</h2>
+
+<blockquote>
+
+<h3>Zadanie</h3>
+<p>
+Przygotuj <strong>schemat blokowy systemu sterowania "Ball on Beam"</strong>
+w formie pojedynczej, czystej grafiki nadającej się do wstawienia
+w&nbsp;slajd prezentacji dyplomowej i&nbsp;w&nbsp;dokument LaTeX
+(rozdział 2 "Budowa stanowiska i&nbsp;oprogramowanie"). Grafika ma
+przedstawiać <strong>połączenia fizyczne</strong> oraz
+<strong>przepływ sygnałów</strong> między wszystkimi podsystemami.
+</p>
+
+<h3>Kontekst projektu</h3>
+<p>
+Stanowisko laboratoryjne utrzymujące kulkę w&nbsp;zadanym położeniu na
+pochylonej belce za pomocą regulatora PID lub LQR. Mikrokontroler
+STM32F767ZI (Nucleo) wykonuje pętlę regulacji, a&nbsp;aplikacja
+desktopowa w&nbsp;Pythonie pełni rolę interfejsu operatora oraz
+&mdash; co istotne &mdash; <strong>realizuje pomiar położenia kulki za
+pomocą wizji komputerowej</strong> (OpenCV + ArUco) i&nbsp;wysyła gotowe
+wielkości fizyczne do STM32 przez UART.
+</p>
+
+<h3>Elementy do umieszczenia na schemacie</h3>
+
+<h4>1. Obiekt regulacji</h4>
+<ul>
+  <li><strong>Belka z&nbsp;kulką</strong> &mdash; centralny element, długość belki 250&nbsp;mm, kulka stalowa &Oslash; 40&nbsp;mm.</li>
+  <li>Belka pochylana przez serwomechanizm wokół osi obrotu (łożysko w&nbsp;środku).</li>
+  <li>Na końcach belki naklejone <strong>znaczniki ArUco</strong> (DICT_4X4_50, ID&nbsp;0 i&nbsp;ID&nbsp;2) &mdash; do detekcji geometrii belki przez kamerę.</li>
+</ul>
+
+<h4>2. Sensory pomiaru pozycji kulki (dwa redundantne tory)</h4>
+<ul>
+  <li>
+    <strong>Kamera USB</strong> (640&times;480, 30&nbsp;FPS) &mdash; tor wizyjny, główny w&nbsp;obecnej konfiguracji.
+    Podłączona do <em>komputera PC</em>, nie do STM32.
+  </li>
+  <li>
+    <strong>Czujnik VL53L0X</strong> (Time-of-Flight, I&sup2;C) &mdash; tor zapasowy / fallback.
+    Podłączony bezpośrednio do STM32 (I&sup2;C1).
+    Aktywny, gdy nie ma świeżej ramki wizyjnej (timeout&nbsp;200&nbsp;ms).
+  </li>
+</ul>
+
+<h4>3. Zadawanie setpointu (trzy tryby pracy)</h4>
+<ul>
+  <li><strong>GUI (Manual)</strong> &mdash; setpoint z&nbsp;aplikacji desktopowej przez UART.</li>
+  <li><strong>Potencjometr analogowy</strong> &mdash; ADC1 w&nbsp;STM32, filtr EMA.</li>
+  <li><strong>Tryb sygnału testowego</strong> &mdash; sinusoidalny setpoint generowany w&nbsp;firmware.</li>
+</ul>
+
+<h4>4. Mikrokontroler &mdash; STM32F767ZI (Nucleo-F767ZI)</h4>
+<ul>
+  <li>W&nbsp;środku bloku MCU pokaż mniejsze bloki funkcjonalne:
+    <ul>
+      <li>parser ramki UART (<code>ParseVisionFrame</code>) + CRC8,</li>
+      <li>filtr EMA (alpha&nbsp;=&nbsp;0,7),</li>
+      <li>regulator (przełącznik PID&nbsp;/&nbsp;LQR),</li>
+      <li>generator PWM dla serwa (Timer3, ~50&nbsp;Hz),</li>
+      <li>nadajnik telemetrii UART (DMA).</li>
+    </ul>
+  </li>
+  <li>FreeRTOS &mdash; dwa zadania: <code>ControlTask</code> i&nbsp;<code>DefaultTask</code> (obsługa komend).</li>
+</ul>
+
+<h4>5. Aktuator</h4>
+<ul>
+  <li><strong>Serwomechanizm MG90S</strong>, sterowany sygnałem PWM&nbsp;~50&nbsp;Hz z&nbsp;STM32, wychylający belkę o&nbsp;kąt &alpha;.</li>
+</ul>
+
+<h4>6. Aplikacja desktopowa (PC, Python/PySide6)</h4>
+<ul>
+  <li>Moduły do pokazania jako pod-bloki: <em>OpenCVPanel</em> (detekcja HSV + ArUco), <em>ControlPanel</em> (nastawy PID/LQR, setpoint), <em>ChartsPanel</em> (telemetria), <em>SerialManager</em> (UART).</li>
+</ul>
+
+<h3>Sygnały i&nbsp;przepływ informacji do zaznaczenia (z opisami!)</h3>
+
+<ol>
+  <li><strong>Belka &rarr; kamera</strong>: tor optyczny &mdash; obraz BGR 640&times;480 @ 30&nbsp;FPS (linia przerywana, "tor wizyjny").</li>
+  <li><strong>Kamera &rarr; PC (OpenCVPanel)</strong>: strumień klatek przez USB (<code>cv2.VideoCapture</code>).</li>
+  <li><strong>OpenCVPanel (PC)</strong>: wewnątrz bloku zaznacz pipeline:
+    <em>BGR&rarr;HSV &rarr; threshold &rarr; morfologia &rarr; kontur &rarr; minEnclosingCircle &rarr; rzut na oś belki (ArUco ID&nbsp;2&nbsp;&harr;&nbsp;ID&nbsp;0) &rarr; pozycja [mm], kąt belki [&deg;]</em>.</li>
+  <li><strong>PC &rarr; STM32 (UART, 115200&nbsp;baud)</strong>: ramka tekstowa
+      <code>V:&lt;pos_mm&gt;;B:&lt;angle_deg&gt;;C:&lt;CRC8&gt;\n</code>, 30&nbsp;Hz.</li>
+  <li><strong>Belka/kulka &rarr; VL53L0X &rarr; STM32 (I&sup2;C1)</strong>: pomiar odległości [mm], tor zapasowy &mdash; zaznacz jako linię przerywaną / alternatywną.</li>
+  <li><strong>Potencjometr &rarr; STM32 (ADC1)</strong>: napięcie analogowe 0&ndash;3,3&nbsp;V &rarr; 12-bit ADC &rarr; setpoint [mm].</li>
+  <li><strong>Wewnątrz STM32</strong>: <em>pozycja kulki &rarr; EMA &rarr; sumator (setpoint &minus; pomiar) &rarr; regulator PID/LQR &rarr; sygnał sterujący u &rarr; saturacja &rarr; PWM</em>.</li>
+  <li><strong>STM32 &rarr; serwo MG90S</strong>: sygnał PWM (szerokość impulsu &harr; kąt).</li>
+  <li><strong>Serwo &rarr; belka</strong>: moment mechaniczny, wychylenie kąta belki &alpha; (pętla zamknięta zamyka się przez fizykę obiektu).</li>
+  <li><strong>STM32 &rarr; PC (UART, telemetria)</strong>: ramka
+      <code>T:&lt;ms&gt;;D:&lt;dist&gt;;Z:&lt;setpoint&gt;;A:&lt;servo_angle&gt;;F:&lt;filtered&gt;;E:&lt;err&gt;;V:&lt;pid_u&gt;;B:&lt;beam_angle&gt;;C:&lt;CRC&gt;</code>, ~30&nbsp;Hz.</li>
+  <li><strong>PC (ControlPanel) &rarr; STM32</strong>: komendy (zmiana setpointu, nastaw PID/LQR, trybu pracy).</li>
+</ol>
+
+<h3>Wymagania graficzne</h3>
+<ul>
+  <li>Schemat <strong>pozioma orientacja</strong>, mieszcząca się na slajdzie 16:9.</li>
+  <li>Wyraźna pętla sprzężenia zwrotnego &mdash; czytelnik musi od razu zobaczyć, że to <em>układ zamknięty</em>.</li>
+  <li>Trzy rodzaje strzałek (zalecane różne style):
+    <ul>
+      <li>linia ciągła = sygnał elektryczny / cyfrowy (UART, PWM, I&sup2;C, ADC),</li>
+      <li>linia przerywana = tor optyczny (kamera &rarr; obiekt),</li>
+      <li>linia gruba / wypełniona = oddziaływanie mechaniczne (serwo &rarr; belka, grawitacja &rarr; kulka).</li>
+    </ul>
+  </li>
+  <li>Każda strzałka <strong>etykietowana</strong> (np. "UART 115200, V:pos;B:angle", "PWM ~50&nbsp;Hz", "I&sup2;C ~10&nbsp;Hz", "obraz 30&nbsp;FPS").</li>
+  <li>Kolorystyka stonowana, czytelna w&nbsp;druku czarno-białym (różnicuj również <em>kształtami</em> bloków, nie tylko kolorami):
+    <ul>
+      <li>sensory &mdash; jeden kolor (np. niebieski),</li>
+      <li>logika sterowania (STM32, PC) &mdash; drugi kolor,</li>
+      <li>obiekt fizyczny i&nbsp;aktuator &mdash; trzeci kolor.</li>
+    </ul>
+  </li>
+  <li>Bloki STM32 i&nbsp;PC narysuj jako <strong>kontenery</strong> (większe ramki) z&nbsp;widocznymi pod-blokami w&nbsp;środku &mdash; to pokazuje, że to systemy złożone.</li>
+  <li>Wyraźnie zaznacz <strong>granicę PC&nbsp;&harr;&nbsp;STM32</strong> (np. pionowa kropkowana linia z&nbsp;etykietą "UART").</li>
+  <li>W&nbsp;rogu mała <strong>legenda</strong>: rodzaje strzałek, oznaczenia kolorystyczne.</li>
+  <li>Wszystkie etykiety po <strong>polsku</strong> (praca dyplomowa).</li>
+  <li>Brak emoji, brak ozdobników; styl techniczny, akademicki (porównywalny ze schematami z&nbsp;Simulinka lub z&nbsp;książki Åström/Murray "Feedback Systems").</li>
+</ul>
+
+<h3>Format wyjściowy</h3>
+<p>
+Wygeneruj schemat jako <strong>SVG</strong> (priorytet &mdash; skaluje się
+bezstratnie do LaTeX-a przez <code>\includegraphics</code> oraz do
+PowerPointa). Dodatkowo &mdash; jeśli to możliwe &mdash; podaj
+<strong>równoważne źródło w&nbsp;TikZ</strong>, żeby można było wstawić
+schemat natywnie do dokumentu LaTeX bez utraty jakości fontów.
+</p>
+
+<h3>Czego unikać</h3>
+<ul>
+  <li>Nie rysuj wnętrza regulatora PID/LQR jako rozbudowanego schematu &mdash; to ma być przegląd <em>całego stanowiska</em>, nie wnętrze regulatora.</li>
+  <li>Nie umieszczaj wzorów matematycznych w&nbsp;blokach.</li>
+  <li>Nie używaj generycznych ikon &mdash; bloki mają być prostokątami z&nbsp;etykietami tekstowymi.</li>
+  <li>Nie pomijaj toru VL53L0X &mdash; nawet jeśli pełni rolę zapasową, jest częścią architektury.</li>
+</ul>
+
+</blockquote>
+
+<hr>
+
+<h2>Dlaczego ten prompt jest skuteczny (notatka dla autora)</h2>
+<ul>
+  <li>
+    <strong>Wymienia konkretne wartości</strong> (115200&nbsp;baud, 30&nbsp;FPS,
+    250&nbsp;mm, ID znaczników, format ramek <code>V:..;B:..;C:..</code>) &mdash;
+    Claude Design nie musi zgadywać, a&nbsp;schemat będzie zgodny z&nbsp;rzeczywistą
+    implementacją w&nbsp;<a href="2-firmware/Core/Src/main.c">main.c</a> i&nbsp;<a href="1-desktop-app/serial_manager.py:163">serial_manager.py:163</a>.
+  </li>
+  <li>
+    <strong>Rozróżnia trzy rodzaje sygnałów</strong> (elektryczny / optyczny /
+    mechaniczny) &mdash; to zapobiega tworzeniu mylących, jednorodnych grafów,
+    w&nbsp;których obraz z&nbsp;kamery wygląda tak samo jak PWM.
+  </li>
+  <li>
+    <strong>Jasno wskazuje pętlę zamkniętą</strong> &mdash; recenzent
+    (J. Michalski) chciał właśnie podkreślenia przepływu sygnałów.
+  </li>
+  <li>
+    <strong>Wymaga SVG + TikZ</strong> &mdash; SVG do prezentacji, TikZ do
+    LaTeX-a w&nbsp;<a href="3-docs/1-projekt-przejsciowy/Formatka_praca_dyplomowa.tex">Formatka_praca_dyplomowa.tex</a>.
+  </li>
+  <li>
+    <strong>Definiuje "czego nie robić"</strong> &mdash; bez tego Claude Design
+    często zagłębia się w&nbsp;szczegóły wnętrza regulatora lub dodaje ikony.
+  </li>
+</ul>
+
+</body>
+</html>

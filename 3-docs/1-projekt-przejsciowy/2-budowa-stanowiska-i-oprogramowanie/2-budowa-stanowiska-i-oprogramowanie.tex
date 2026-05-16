@@ -47,6 +47,30 @@ Komponenty wykorzystane przy budowie stanowiska zestawiono w tabeli \ref{tab:kom
   \end{tabular}
 \end{table}
 
+\subsection{Architektura systemu i przepływ sygnałów}
+\label{sec:schemat-blokowy}
+
+Powiązania między poszczególnymi podsystemami stanowiska oraz przepływ sygnałów
+pomiarowych, sterujących i~telemetrycznych przedstawiono na rys.~\ref{fig:schematblokowy}.
+Pętla regulacji zamknięta jest przez tor wizyjny: kamera USB obserwuje belkę
+i~kulkę, aplikacja desktopowa wyznacza pozycję kulki oraz kąt belki, a~następnie
+przekazuje te wielkości do mikrokontrolera STM32 poprzez interfejs UART
+(115200~baud, ramka \texttt{V:<pos>;B:<angle>;C:<CRC>}). Mikrokontroler
+realizuje algorytm regulacji (PID lub LQR) i~steruje serwomechanizmem sygnałem
+PWM, który zmienia kąt belki~--~zamykając pętlę poprzez fizyczne oddziaływanie
+na obiekt regulacji. Równolegle STM32 wysyła do aplikacji ramki telemetryczne
+zawierające pomiar, uchyb, wartość zadaną i~sygnał sterujący, co umożliwia
+wizualizację oraz strojenie regulatora po stronie PC.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{2-budowa-stanowiska-i-oprogramowanie/2-img/schematblokowy.png}
+  \caption{Schemat blokowy stanowiska: połączenia podsystemów i~przepływ sygnałów
+  (elektrycznych, optycznych i~mechanicznych) między aplikacją PC, mikrokontrolerem
+  STM32, sensorami, serwomechanizmem oraz obiektem regulacji}
+  \label{fig:schematblokowy}
+\end{figure}
+
 % -----------------------------------------------------------------------
 \section{Mikrokontroler STM32 i peryferia}
 % -----------------------------------------------------------------------
