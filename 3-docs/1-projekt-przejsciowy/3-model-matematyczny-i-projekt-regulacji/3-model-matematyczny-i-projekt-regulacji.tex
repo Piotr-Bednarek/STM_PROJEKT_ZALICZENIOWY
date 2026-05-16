@@ -51,7 +51,7 @@ gdzie:
 \begin{itemize}
   \item $x$ - pozycja 
   \item $g$ - przyspieszenie ziemskie 
-  \item $\Theta$ - kąt nachylenia równi
+  \item $\theta$ - kąt nachylenia równi
 \end{itemize}
 
 a równanie momentu obrotowego wokół osi kulki:
@@ -218,7 +218,7 @@ K_obl = (2 * p(1)) / A_stopnie;
 \subsubsection{Weryfikacja wyników i wyznaczenie modelu końcowego}
  
 Powyższą procedurę powtórzono dla wszystkich siedmiu wartości wychylenia.
-Rysunki~\ref{fig:ident109}--\ref{fig:ident125} przedstawiają surowe przebiegi pozycji
+Rysunki~--rys. \ref{fig:ident109}----rys. \ref{fig:ident125} przedstawiają surowe przebiegi pozycji
 kulki oraz dopasowane parabole dla kolejnych prób.
  
 Zaobserwowano, że dla dużych kątów wychylenia estymowane wzmocnienie w największym
@@ -238,10 +238,24 @@ Wyznaczone wartości wzmocnienia dla pięciu uwzględnionych prób wynoszą:
  
 Końcową wartość wzmocnienia przyjęto jako średnią arytmetyczną powyższych próbek:
 \begin{equation}
-    K = 11{,}9318\;\frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}.
+    \bar{K} = \frac{1}{n}\sum_{i=1}^{n} K_i = 11{,}9318\;\frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}.
     \label{eq:Kfinal}
 \end{equation}
- 
+
+Aby ocenić rozrzut otrzymanych wartości, wyznaczono także wariancję próbkową oraz
+odchylenie standardowe:
+\begin{equation}
+    s^2 = \frac{1}{n-1}\sum_{i=1}^{n}\bigl(K_i - \bar{K}\bigr)^2
+        = 0{,}1570\;\left[\frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}\right]^2,
+    \label{eq:Kvar}
+\end{equation}
+\begin{equation}
+    s = \sqrt{s^2} = 0{,}3962\;\frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}.
+    \label{eq:Kstd}
+\end{equation}
+Odchylenie standardowe stanowi ok. $3{,}3\,\%$ wartości średniej, co świadczy o
+dobrej powtarzalności estymacji wzmocnienia w obrębie uwzględnionych prób.
+
 Transmitancja identyfikowanego układu kulka--belka przyjmuje zatem postać:
 \begin{equation}
     G(s) = \frac{11{,}9318}{s^2}, \quad
@@ -327,6 +341,7 @@ Przed zestawieniem wyników konieczne jest ujednolicenie jednostek, ponieważ ob
 metody operują na różnych układach pomiarowych.
  
 \paragraph{Wzmocnienie teoretyczne.}
+\mbox{}
 Na podstawie wyprowadzonego modelu wzmocnienie statyczne układu wynosi:
 \begin{equation}
     K_\mathrm{teor} = k_\mathrm{mech} \cdot c_\mathrm{ball}
@@ -337,6 +352,7 @@ Na podstawie wyprowadzonego modelu wzmocnienie statyczne układu wynosi:
 gdzie wejście $u$ wyrażone jest w radianach, a wyjście $x$ w metrach.
  
 \paragraph{Wzmocnienie doświadczalne -- przeliczenie jednostek.}
+\mbox{}
 Estymacja metodą odpowiedzi skokowej dała wynik w jednostkach pomiarowych eksperymentu:
 \begin{equation}
     K_\mathrm{exp} = 11{,}9318 \; \frac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}.
@@ -352,6 +368,7 @@ Przeliczenenie na układ SI wymaga przeliczenia milimetrów na metry oraz stopni
 \end{equation}
  
 \paragraph{Porównanie.}
+\mbox{}
 Zestawienie obu wartości w tych samych jednostkach przedstawiono
 w tabeli~\ref{tab:Kcomp}.
 \begin{table}[H]
@@ -382,21 +399,26 @@ dynamice obiektu.
  
 \begin{table}[H]
 \centering
+\renewcommand{\arraystretch}{1.6}
 \caption{Parametry numeryczne modelu przyjęte do syntezy regulatorów}
 \label{tab:params}
-\begin{tabular}{lllp{5cm}}
+\begin{tabular}{l l c >{\raggedright\arraybackslash}p{5.5cm}}
 \hline
 \textbf{Parametr} & \textbf{Wartość} & \textbf{Jednostka} & \textbf{Źródło} \\
 \hline
-$T_\mathrm{serwo}$  & $0{,}095$ & $\mathrm{s}$ & karta katalogowa, interpolacja \\[4pt]
-$c_\mathrm{ball}$   & $5{,}886$ & $\dfrac{\mathrm{m}}{\mathrm{s}^2 \cdot \mathrm{rad}}$ & wyprowadzenie analityczne \\[8pt]
-$k_\mathrm{mech}$   & $0{,}20$  & $-$ & pomiar geometryczny ($3\;\mathrm{cm}/15\;\mathrm{cm}$) \\[4pt]
-$K_\mathrm{exp}$    & $11{,}9318$ & $\dfrac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}$ & identyfikacja doświadczalna \\[8pt]
-$K_\mathrm{exp,SI}$ & $0{,}684$ & $\dfrac{\mathrm{m}}{\mathrm{s}^2 \cdot \mathrm{rad}}$ & przeliczenie z $K_\mathrm{exp}$ \\[4pt]
+$T_\mathrm{serwo}$  & $0{,}095$    & $\mathrm{s}$
+    & karta katalogowa, interpolacja  \\
+$c_\mathrm{ball}$   & $5{,}886$    & $\tfrac{\mathrm{m}}{\mathrm{s}^2 \cdot \mathrm{rad}}$
+    & wyprowadzenie analityczne \\
+$k_\mathrm{mech}$   & $0{,}20$     & $-$
+    & pomiar geometryczny ($3\,\mathrm{cm}/15\,\mathrm{cm}$) \\
+$K_\mathrm{exp}$    & $11{,}9318$  & $\tfrac{\mathrm{mm}}{\mathrm{s}^2 \cdot {^\circ}}$
+    & identyfikacja doświadczalna \\
+$K_\mathrm{exp,SI}$ & $0{,}684$    & $\tfrac{\mathrm{m}}{\mathrm{s}^2 \cdot \mathrm{rad}}$
+    & przeliczenie z $K_\mathrm{exp}$ \\
 \hline
 \end{tabular}
 \end{table}
-TODO dokonczyc te sekcje!!! - tabela jeszcze do zmiany 
 
 % -----------------------------------------------------------------------
 \section{Projekt regulatora LQR}
