@@ -508,8 +508,82 @@ gdzie $\mathbf{e} = \mathbf{x} - \mathbf{x}_\mathrm{ref}$ jest wektorem uchybu s
 a~$\mathbf{x}_\mathrm{ref} = [r,\;0,\;0]^T$ odpowiada zadanej pozycji kulki~$r$,
 zerowej prędkości i~zerowemu kątowi belki.
 
-TODO dodac jakies przykladowe macierze Q i R / skrypt w pythonie gdzie to liczyliśmy 
-musi to byc w tym miejscu
+Wskaźnik jakości LQR optymalizuje kompromis między uchybami stanów a wydatkiem energetycznym sterowania. Macierze wagowe $\mathbf{Q}$ oraz $\mathbf{R}$ mają postać diagonalną:
+\begin{equation}
+  \mathbf{Q} = \begin{bmatrix} Q_x & 0 & 0 \\ 0 & Q_v & 0 \\ 0 & 0 & Q_{\theta} \end{bmatrix}, \quad \mathbf{R} = [R],
+\end{equation}
+gdzie $Q_x$ odpowiada za wagę błędu pozycji kulki, $Q_v$ jest wagą prędkości kulki (wpływającą na tłumienie oscylacji), $Q_{\theta}$ ogranicza wychylenia belki, natomiast $R$ określa koszt ruchu serwomechanizmu.
+
+Do numerycznego wyznaczania optymalnego wektora wzmocnień $\mathbf{K}$ w czasie rzeczywistym opracowano skrypt w języku Python zaimplementowany w aplikacji nadzorczej (moduł \texttt{lqr\_calculator.py}). Skrypt rozwiązuje ciągłe algebraiczne równanie Riccatiego (CARE):
+\begin{equation}
+  \mathbf{A}^T\mathbf{P} + \mathbf{P}\mathbf{A} - \mathbf{P}\mathbf{B}\mathbf{R}^{-1}\mathbf{B}^T\mathbf{P} + \mathbf{Q} = 0,
+\end{equation}
+a następnie wyznacza wzmocnienie sprzężenia zwrotnego ze wzoru:
+\begin{equation}
+  \mathbf{K} = \mathbf{R}^{-1}\mathbf{B}^T\mathbf{P}.
+\end{equation}
+
+Poniższy listing przedstawia kod funkcji obliczającej te wzmocnienia na podstawie biblioteki \texttt{SciPy}.
+
+\begin{lstlisting}[style=pythonstyle, caption={Obliczanie wzmocnień regulatora LQR (lqr\_calculator.py)}, label={lst:lqr_calc}]
+import numpy as np
+from scipy.linalg import solve_continuous_are
+
+def compute_lqr_gains(Q_x: float, Q_v: float, Q_theta: float, R: float, T_servo: float = 0.095, g: float = 9.81):
+    c_ball = (3.0 / 5.0) * g  # ~5.886 m/s^2/rad (dla toczącej się kulki)
+    k_mech = 1.0
+
+    # Macierz stanu A
+    A = np.array([
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, -k_mech * c_ball],
+        [0.0, 0.0, -1.0 / T_servo]
+    ])
+
+    # Macierz wejścia B
+    B = np.array([
+        [0.0],
+        [0.0],
+        [1.0 / T_servo]
+    ])
+
+    # Macierz wag Q (koszt stanów)
+    Q = np.diag([Q_x, Q_v, Q_theta])
+
+    # Macierz wag R (koszt sterowania)
+    R_mat = np.array([[R]])
+
+    # Rozwiązanie równania Riccatiego
+    P = solve_continuous_are(A, B, Q, R_mat)
+
+    # Obliczenie wzmocnień K = R^-1 * B^T * P
+    K = np.linalg.inv(R_mat) @ B.T @ P
+
+    K1 = abs(K[0, 0])
+    K2 = abs(K[0, 1])
+    K3 = abs(K[0, 2])
+
+    return K1, K2, K3
+\end{lstlisting}
+
+W procesie strojenia układu na stanowisku laboratoryjnym przetestowano kilka wariantów wag. Najlepszą stabilizację i dynamikę uzyskano dla parametrów zapisanych w konfiguracji aplikacji nadzorczej. Zestawienie tych wag wraz z obliczonymi wartościami wzmocnień przedstawiono w tabeli~\ref{tab:lqr_presets}.
+
+\begin{table}[H]
+  \centering
+  \caption{Przykładowe zestawy wag LQR i uzyskane wzmocnienia}
+  \label{tab:lqr_presets}
+  \begin{tabular}{lcccc}
+    \toprule
+    \textbf{Nazwa zestawu} & \textbf{Wagi stanu } $\mathbf{Q}$ & \textbf{Koszt } $R$ & \textbf{Wzmocnienia } $\mathbf{K} = [K_1, K_2, K_3]$ \\
+    \midrule
+    \textit{Najlepsze} & $\text{diag}(136{,}0;\; 1{,}0;\; 1{,}0)$ & $20{,}0$ & $K_1 = 2{,}6077$, $K_2 = 1{,}1905$, $K_3 = 0{,}5432$ \\
+    \textit{Mega fajne} & $\text{diag}(136{,}0;\; 1{,}0;\; 1{,}0)$ & $9{,}0$ & $K_1 = 3{,}8873$, $K_2 = 1{,}5259$, $K_3 = 0{,}6786$ \\
+    \textit{Fajne wagi LQR 1} & $\text{diag}(139{,}0;\; 1{,}0;\; 1{,}0)$ & $11{,}0$ & $K_1 = 3{,}5548$, $K_2 = 1{,}4297$, $K_3 = 0{,}6297$ \\
+    \textit{Testowe 1} & $\text{diag}(142{,}0;\; 1{,}0;\; 1{,}0)$ & $17{,}0$ & $K_1 = 2{,}8901$, $K_2 = 1{,}2664$, $K_3 = 0{,}5732$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
 
 Uzyskany wektor wzmocnień $\mathbf{K}$ przeniesiono bezpośrednio do modułu
 \texttt{lqr.c} firmware.
