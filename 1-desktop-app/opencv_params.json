@@ -23,12 +23,12 @@
         "sharpen_enabled": false,
         "apriltag_refine": true,
         "clahe_enabled": true,
-        "clahe_clip_limit": 1.0,
-        "clahe_tile_size": 2
+        "clahe_clip_limit": 2.0,
+        "clahe_tile_size": 8
     },
     "calibration": {
-        "min": 0.038979109361814514,
-        "max": 0.9895753467904568,
+        "min": 0.030301432794231167,
+        "max": 0.959172463609994,
         "angle_offset": 0.0,
         "angle_method": 0
     }
