@@ -596,18 +596,69 @@ Sygnał sterujący wyznaczany jest jako:
 \section{Projekt regulatora PID}
 
 W~firmware mikrokontrolera zaimplementowano klasyczny regulator PID
-z~następującymi modyfikacjami:
-\begin{itemize}
-  \item \textbf{pochodna na pomiarze} — różniczkowanie sygnału wyjścia
-        (nie uchybu), co eliminuje skok pochodnej przy zmianie wartości zadanej;
-  \item \textbf{anti-windup} (ograniczenie członu całkującego) — zapobiega
-        nasyceniu członu~I przy wysyceniu wyjścia;
-  \item \textbf{dyskretyzacja} — metoda prostokątów (Euler przód)
-        z~krokiem $T_s = 30\,\mathrm{ms}$.
-\end{itemize}
+z~kluczowymi modyfikacjami stabilizującymi i usprawniającymi sterowanie
+rzeczywistym obiektem. Nastawy regulatora PID ($K_p$, $K_i$, $K_d$) dobierane
+są iteracyjnie i~przesyłane do mikrokontrolera w~czasie rzeczywistym przez
+aplikację desktopową bez konieczności ponownego programowania układu.
 
-TODO uzasadnic dlaczego pochodna na pomiarze i dokonczyć ten rozdzial task @Banaszak !!!!!!!
+Dyskretny algorytm sterowania zaimplementowany na STM32 opiera się na metodzie
+prostokątów (Euler w przód) z okresem próbkowania $T_s = 0.032$~s. W celu
+zapewnienia stabilności i eliminacji nieliniowości fizycznych, klasyczna
+struktura regulatora została rozszerzona o poniższe funkcjonalności.
 
-Nastawy regulatora PID ($K_p$, $K_i$, $K_d$) dobierane są iteracyjnie
-i~przesyłane do mikrokontrolera w~czasie rzeczywistym przez aplikację
-desktopową bez konieczności ponownego programowania układu.
+\subsection{Różniczkowanie po pomiarze (Derivative-on-Measurement)}
+W klasycznym regulatorze PID człon różniczkujący wyliczany jest na podstawie
+uchybu regulacji: $D(t) = K_d \frac{de(t)}{dt}$. W przypadku skokowej zmiany
+wartości zadanej (np. ze 124~mm do 172~mm), uchyb $e(t) = r(t) - y(t)$ również
+zmienia się skokowo. Pochodna z funkcji skokowej (teoretycznie impuls Diraca)
+generuje bardzo dużą, chwilowo nieskończoną wartość. Zjawisko to nazywane
+jest szarpnięciem pochodnej (ang. \textit{derivative kick}).
+
+W fizycznym układzie prowadziłoby to do gwałtownej zmiany kąta o pełen zakres roboczy,
+co mogłoby uszkodzić zębatki serwomechanizmu MG90S oraz spowodować bardzo szybkie
+dotoczenie się kulki do końca belki. Aby temu zapobiec, człon różniczkujący 
+zaimplementowano na podstawie pochodnej z sygnału pomiarowego (pozycji kulki):
+\begin{equation}
+    D(t) = -K_d \frac{dy(t)}{dt}
+\end{equation}
+Ponieważ pozycja kulki $y(t)$ jest sygnałem ciągłym (kulka posiada masę
+i bezwładność, więc nie może zmienić pozycji natychmiastowo), pochodna
+po pomiarze nie wykazuje szpilek przy zmianie wartości zadanej, co zapewnia
+płynne i bezpieczne sterowanie.
+
+\subsection{Filtracja sygnału różniczkującego}
+Różniczkowanie numeryczne jest operacją bardzo podatną na szum pomiarowy.
+Wszelkie drobne fluktuacje pozycji kulki (wynikające z rozdzielczości
+czujnika laserowego ToF lub drgań kamery) po zróżniczkowaniu i pomnożeniu
+przez wzmocnienie $K_d = 4.4$ wywoływałyby drgania serwomechanizmu,
+powodując jego przegrzewanie i przyspieszone zużycie mechaniczne.
+
+Aby wyeliminować szum, w kodzie rzeczywistym na STM32 zastosowano filtr
+wykładniczej średniej kroczącej (EMA), który w dziedzinie czasu ciągłego
+odpowiada filtrowi inercyjnemu pierwszego rzędu:
+\begin{equation}
+    G_f(s) = \frac{1}{T_f s + 1}
+\end{equation}
+gdzie stała czasowa filtra $T_f$ została dobrana tak, aby tłumić
+szybkozmienne zakłócenia pomiarowe, nie wprowadzając jednocześnie zbyt
+dużego opóźnienia fazowego, które mogłoby zdestabilizować układ zamknięty.
+
+\subsection{Zabezpieczenie przed nasyceniem całki (Anti-windup)}
+Serwomechanizm MG90S posiada fizyczne ograniczenia kąta wychylenia belki
+(nasycenie sygnału sterującego zaimplementowane w kodzie jako zakres
+60--140 stopni, co odpowiada odchyleniu $\pm 40^{\circ}$). W momencie
+wystąpienia dużego uchybu (zaraz po skoku wartości zadanej), regulator
+generuje sygnał sterujący przekraczający dopuszczalny limit, przez co
+serwo wchodzi w stan nasycenia.
+
+Gdyby człon całkujący kontynuował akumulację uchybu w stanie nasycenia
+(zjawisko \textit{integrator windup}), wartość całki urosłaby do bardzo
+dużych rozmiarów. Po dotarciu kulki do punktu zadanego, nagromadzona wartość
+całki zmuszałaby serwo do utrzymywania belki w przechylonej pozycji.
+Spowodowałoby to ogromne przeregulowanie oraz długo gasnące oscylacje
+wokół wartości zadanej.
+
+W algorytmie STM32 zastosowano metodę blokowania całkowania typu
+\textit{clamping} (blokowanie całki). Całkowanie uchybu jest wstrzymywane
+(zamrażane) w momencie, gdy regulator jest nasycony, a znak uchybu wskazuje
+na to, że dalsza integracja pogłębiłaby nasycenie. 
