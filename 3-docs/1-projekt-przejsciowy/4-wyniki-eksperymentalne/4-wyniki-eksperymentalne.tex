@@ -263,11 +263,11 @@ co idealnie pokrywa się z zarejestrowanym pikiem sterowania. Fakt ten stanowi
 praktyczne potwierdzenie poprawności przeliczenia wzmocnień regulatora oraz
 wiarygodności wzmocnienia samego modelu w początkowej fazie ruchu.
 
-Po początkowym piku sygnały sterujące ulegają jednak wyraźnemu rozbieżnieniu. Na
+Po początkowym piku sygnału sterujacego mozna zaobserwować silne rozbieności miedzy rzeczywistym obiketem i modelami. Na
 rzeczywistym obiekcie, dzięki obecności silnego tarcia, pozycja kulki szybko się
 ustala bez znaczącego przeregulowania, co powoduje spadek uchybu i powrót sygnału
 sterowania do okolic zera. W modelach Simulink, pozbawionych oporów ruchu, kulka
-wpada w silne oscylacje wokół setpointu. W efekcie regulator w symulacji próbuje
+wpada w silne oscylacje wokół wartości zadanej. W efekcie regulator w symulacji próbuje
 przeciwdziałać tym wahaniom, co generuje sinusoidalne oscylacje sygnału
 sterującego, całkowicie rozbieżne w fazie i amplitudzie z sygnałem rzeczywistym.
 
@@ -299,7 +299,7 @@ czasowej serwa) można wyrazić uproszczonym wzorem:
 \end{equation}
 Pominięcie członu całkującego w powyższej analizie jest w pełni uzasadnione
 teoretycznie, ponieważ jego wzmocnienie ($K_i = 0.2$) jest relatywnie małe
-w stosunku do dynamiki całego układu. Wpływ całki na dominantną parę biegunów
+w stosunku do dynamiki całego układu. Wpływ całki na dominującą parę biegunów
 zespolonych układu trzeciego rzędu (którym staje się układ po dodaniu członu I)
 jest znikomy, a dynamika drgań pozostaje zdominowana przez te dwa bieguny.
 W modelu pozbawionym naturalnego tarcia ($b=0$), jedynym źródłem tłumienia jest
@@ -345,7 +345,7 @@ możliwe byłoby zwiększenie siły filtrowania (zmniejszenie wartości $\alpha$
 zastosowanie bardziej zaawansowanych algorytmów estymacji, takich jak filtr
 Kalmana pracujący bezpośrednio na sygnale pozycji.
 
-\subsection{Porównanie ostateczne i ocena dokładności modeli}
+\subsection{Wnioski końcowe i ocena dokładności modeli}
 Dokonując ostatecznego porównania modeli, należy przeanalizować ich zachowanie w układzie
 zamkniętym w odniesieniu do obiektu rzeczywistego. Dane z tabeli~\ref{tab:wskazniki}
 wskazują, że model teoretyczny charakteryzuje się mniejszym przeregulowaniem (ok.
